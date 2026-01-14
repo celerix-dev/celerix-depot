@@ -1,4 +1,13 @@
 services:
+  mdns-responder:
+    image: flungo/avahi
+    restart: always
+    network_mode: host
+    environment:
+      - SERVER_USE_IPV4=yes
+      - SERVER_USE_IPV6=no
+      - SERVER_HOST_NAME=celerix
+      - SERVER_DOMAIN_NAME=local
   depot:
     container_name: celerix-depot
     build: .
@@ -11,4 +20,4 @@ services:
       - DB_PATH=/app/data/depot.db
       - STORAGE_DIR=/app/data/uploads
       - ADMIN_SECRET=admin123
-    restart: unless-stopped
+    restart: always
