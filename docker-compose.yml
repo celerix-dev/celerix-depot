@@ -1,0 +1,14 @@
+services:
+  depot:
+    container_name: celerix-depot
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./data/uploads:/app/data/uploads
+    environment:
+      - DB_PATH=/app/data/depot.db
+      - STORAGE_DIR=/app/data/uploads
+      - ADMIN_SECRET=admin123
+    restart: unless-stopped

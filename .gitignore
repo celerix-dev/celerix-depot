@@ -1,0 +1,10 @@
+/data
+/data/uploads
+/data/depot.db
+/backend/data
+/backend/uploads
+/backend/depot.db
+
+frontend/node_modules
+frontend/dist
+.idea

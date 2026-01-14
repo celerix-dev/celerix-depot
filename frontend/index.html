@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-core="modern">
+<head>
+    <script>
+        (function () {
+            const isOSDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = isOSDark ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-bs-theme', theme);
+        })();
+    </script>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Celerix Depot</title>
+</head>
+<body class="overflow-hidden">
+    <div id="app" class="container-fluid px-0 h-100 overflow-auto"></div>
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+
