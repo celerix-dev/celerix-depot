@@ -10,6 +10,7 @@ const fileListRef = ref<InstanceType<typeof FileList> | null>(null);
 const persona = ref('client');
 const clientName = ref('');
 const recoveryCode = ref('');
+const appVersion = ref('');
 const showNamingModal = ref(false);
 const showAdminModal = ref(false);
 const showRecoveryModal = ref(false);
@@ -73,11 +74,19 @@ const performRecovery = async () => {
   }
 };
 
+const closeRecoveryModal = () => {
+  showRecoveryModal.value = false;
+  if (persona.value === 'client' && !clientName.value) {
+    showNamingModal.value = true;
+  }
+};
+
 const refreshPersona = async () => {
   const data = await fetchPersona();
   persona.value = data.persona;
   clientName.value = data.name;
   recoveryCode.value = data.recovery_code || '';
+  appVersion.value = data.version || '';
 
   if (persona.value === 'client' && !clientName.value) {
     showNamingModal.value = true;
@@ -96,6 +105,7 @@ onMounted(refreshPersona);
             <div class="d-flex align-items-center">
               <div><img :src="logo" style="width:36px;height:36px;" alt="Celerix logo"></div>
               <div><h2 class="ms-2 mb-0 me-3">Celerix Depot</h2></div>
+              <div v-if="appVersion"><small class="text-muted">v{{ appVersion }}</small></div>
             </div>
           </div>
           <div class="d-flex align-items-center">
@@ -129,8 +139,9 @@ onMounted(refreshPersona);
             <p>Please enter your name to continue.</p>
             <input v-model="newName" type="text" class="form-control" placeholder="Your Name" @keyup.enter="saveName" />
           </div>
-          <div class="modal-footer">
-            <button class="btn btn-primary w-100" :disabled="!newName.trim()" @click="saveName">Save Name</button>
+          <div class="modal-footer d-flex flex-column">
+            <button class="btn btn-primary w-100 mb-2" :disabled="!newName.trim()" @click="saveName">Save Name</button>
+            <button class="btn btn-link btn-sm" @click="showNamingModal = false; showRecoveryModal = true">Already have a persona? Restore here</button>
           </div>
         </div>
       </div>
@@ -187,7 +198,7 @@ onMounted(refreshPersona);
         <div class="modal-content">
           <div class="modal-header">
             <h5 class="modal-title">Recover Persona</h5>
-            <button type="button" class="btn-close" @click="showRecoveryModal = false"></button>
+            <button type="button" class="btn-close" @click="closeRecoveryModal"></button>
           </div>
           <div class="modal-body">
             <p>Enter your recovery code to restore your persona.</p>

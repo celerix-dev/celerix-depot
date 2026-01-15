@@ -29,6 +29,7 @@ export interface PersonaData {
   persona: string;
   name: string;
   recovery_code?: string;
+  version?: string;
 }
 
 export const fetchPersona = async (): Promise<PersonaData> => {

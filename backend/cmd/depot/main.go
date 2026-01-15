@@ -17,6 +17,9 @@ import (
 //go:embed all:dist
 var frontendDist embed.FS
 
+//go:embed version.json
+var versionFile []byte
+
 func main() {
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
@@ -43,9 +46,10 @@ func main() {
 	defer database.Close()
 
 	h := &api.Handler{
-		DB:          database,
-		StorageDir:  storageDir,
-		AdminSecret: os.Getenv("ADMIN_SECRET"),
+		DB:            database,
+		StorageDir:    storageDir,
+		AdminSecret:   os.Getenv("ADMIN_SECRET"),
+		VersionConfig: versionFile,
 	}
 
 	r := gin.Default()
@@ -67,6 +71,7 @@ func main() {
 
 	apiGroup := r.Group("/api")
 	{
+		apiGroup.GET("/version", h.GetVersion)
 		apiGroup.GET("/persona", h.GetPersona)
 		apiGroup.POST("/persona/name", h.UpdateClientName)
 		apiGroup.POST("/persona/recover", h.RecoverPersona)
@@ -77,6 +82,7 @@ func main() {
 		apiGroup.DELETE("/files/:id", h.DeleteFile)
 		apiGroup.GET("/clients", h.ListClients)
 		apiGroup.PUT("/clients/:id", h.UpdateClient)
+		apiGroup.DELETE("/clients/:id", h.DeleteClient)
 		apiGroup.GET("/download/:id", h.DownloadFile)
 	}
 

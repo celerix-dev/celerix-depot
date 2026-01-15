@@ -100,6 +100,23 @@ func TestPersonaRecovery(t *testing.T) {
 	if adminRecoverResp.Persona != "admin" {
 		t.Errorf("Expected admin persona, got %s", adminRecoverResp.Persona)
 	}
+
+	// 4. Delete client
+	reqDel, _ := http.NewRequest("DELETE", "/clients/"+clientID, nil)
+	reqDel.Header.Set("X-Admin-Secret", "supersecret")
+	wDel := httptest.NewRecorder()
+	r.DELETE("/clients/:id", h.DeleteClient)
+	r.ServeHTTP(wDel, reqDel)
+
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("Delete client failed: %s", wDel.Body.String())
+	}
+
+	// Verify client is gone
+	_, err = db.GetClient(database, clientID)
+	if err == nil {
+		t.Error("Client still exists after deletion")
+	}
 }
 
 func TestDeleteFile(t *testing.T) {

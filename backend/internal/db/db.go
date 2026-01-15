@@ -33,6 +33,7 @@ type ClientRecord struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	RecoveryCode string `json:"recovery_code"`
+	LastActive   int64  `json:"last_active"`
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {
@@ -67,7 +68,8 @@ func InitDB(dbPath string) (*sql.DB, error) {
 	CREATE TABLE IF NOT EXISTS clients (
 		id TEXT PRIMARY KEY,
 		name TEXT,
-		recovery_code TEXT UNIQUE
+		recovery_code TEXT UNIQUE,
+		last_active INTEGER
 	);`
 
 	_, err = db.Exec(query)
@@ -96,6 +98,7 @@ func InitDB(dbPath string) (*sql.DB, error) {
 	// Clients table migrations
 	clientColumns := map[string]string{
 		"recovery_code": "TEXT",
+		"last_active":   "INTEGER",
 	}
 
 	for col, colType := range clientColumns {
@@ -221,18 +224,29 @@ func GetFileRecordsByOwner(db *sql.DB, ownerID string) ([]FileRecord, error) {
 	return resp.Files, nil
 }
 
-func UpsertClient(db *sql.DB, id, name, recoveryCode string) error {
-	query := `INSERT INTO clients (id, name, recovery_code) VALUES (?, ?, ?) 
-	          ON CONFLICT(id) DO UPDATE SET name=excluded.name`
-	_, err := db.Exec(query, id, name, recoveryCode)
+func UpsertClient(db *sql.DB, id, name, recoveryCode string, lastActive int64) error {
+	query := `INSERT INTO clients (id, name, recovery_code, last_active) VALUES (?, ?, ?, ?) 
+	          ON CONFLICT(id) DO UPDATE SET name=excluded.name, last_active=excluded.last_active`
+	_, err := db.Exec(query, id, name, recoveryCode, lastActive)
+	return err
+}
+
+func UpdateClientLastActive(db *sql.DB, id string, lastActive int64) error {
+	query := `UPDATE clients SET last_active = ? WHERE id = ?`
+	_, err := db.Exec(query, lastActive, id)
+	return err
+}
+
+func DeleteClient(db *sql.DB, id string) error {
+	_, err := db.Exec("DELETE FROM clients WHERE id = ?", id)
 	return err
 }
 
 func GetClient(db *sql.DB, id string) (*ClientRecord, error) {
-	query := `SELECT id, name, COALESCE(recovery_code, '') FROM clients WHERE id = ?`
+	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0) FROM clients WHERE id = ?`
 	row := db.QueryRow(query, id)
 	var client ClientRecord
-	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode)
+	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive)
 	if err != nil {
 		return nil, err
 	}
@@ -240,10 +254,10 @@ func GetClient(db *sql.DB, id string) (*ClientRecord, error) {
 }
 
 func GetClientByRecoveryCode(db *sql.DB, code string) (*ClientRecord, error) {
-	query := `SELECT id, name, recovery_code FROM clients WHERE recovery_code = ?`
+	query := `SELECT id, name, recovery_code, COALESCE(last_active, 0) FROM clients WHERE recovery_code = ?`
 	row := db.QueryRow(query, code)
 	var client ClientRecord
-	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode)
+	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +265,7 @@ func GetClientByRecoveryCode(db *sql.DB, code string) (*ClientRecord, error) {
 }
 
 func ListClients(db *sql.DB) ([]ClientRecord, error) {
-	query := `SELECT id, name, COALESCE(recovery_code, '') FROM clients ORDER BY name ASC`
+	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0) FROM clients ORDER BY name ASC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -261,7 +275,7 @@ func ListClients(db *sql.DB) ([]ClientRecord, error) {
 	var clients []ClientRecord
 	for rows.Next() {
 		var c ClientRecord
-		if err := rows.Scan(&c.ID, &c.Name, &c.RecoveryCode); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.RecoveryCode, &c.LastActive); err != nil {
 			return nil, err
 		}
 		clients = append(clients, c)

@@ -10,11 +10,14 @@ RUN npm run build
 FROM golang:1.25.1-alpine AS backend-builder
 RUN apk add --no-cache gcc musl-dev
 WORKDIR /app
+COPY version.json ./
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
 # Copy the built frontend to the backend directory for embedding
 COPY --from=frontend-builder /app/frontend/dist ./cmd/depot/dist
+# Copy version.json to the directory where it's embedded
+COPY version.json ./cmd/depot/version.json
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o depot ./cmd/depot/main.go
 
 # Stage 3: Final image

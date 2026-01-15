@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { getAdminSecret, getClientID } from '@/utils/persona';
+import { getAdminSecret, getClientID, fetchPersona } from '@/utils/persona';
 import dayjs from 'dayjs';
 
 interface FileRecord {
@@ -17,9 +17,11 @@ interface ClientRecord {
   id: string;
   name: string;
   recovery_code: string;
+  last_active: number;
 }
 
 const activeTab = ref<'files' | 'clients'>('files');
+const appVersion = ref('');
 
 // Files management
 const files = ref<FileRecord[]>([]);
@@ -142,6 +144,32 @@ const saveEditClient = async (id: string) => {
   }
 };
 
+const deleteClient = async (id: string, name: string) => {
+  if (!confirm(`Are you sure you want to delete client "${name}"? This will NOT delete their files, but they will be listed as "Unknown".`)) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/clients/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Client-ID': getClientID(),
+        'X-Admin-Secret': getAdminSecret(),
+      },
+    });
+
+    if (response.ok) {
+      await fetchAllClients();
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      alert(`Failed to delete client: ${errorData.error || response.statusText}`);
+    }
+  } catch (error) {
+    console.error('Error deleting client:', error);
+    alert('Error deleting client');
+  }
+};
+
 const deleteFile = async (id: string, name: string) => {
   if (!confirm(`Are you sure you want to delete "${name}"?`)) {
     return;
@@ -179,7 +207,9 @@ const formatDate = (timestamp: number) => {
   return dayjs(timestamp * 1000).format('YYYY-MM-DD HH:mm:ss');
 };
 
-onMounted(() => {
+onMounted(async () => {
+  const data = await fetchPersona();
+  appVersion.value = data.version || '';
   fetchAllFiles();
   fetchAllClients();
 });
@@ -188,7 +218,10 @@ onMounted(() => {
 <template>
   <div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
-      <h2>Admin Management</h2>
+      <div class="d-flex align-items-center">
+        <h2 class="mb-0 me-3">Admin Management</h2>
+        <div v-if="appVersion"><small class="text-muted">v{{ appVersion }}</small></div>
+      </div>
       <router-link to="/" class="btn btn-outline-secondary">Back to Gallery</router-link>
     </div>
 
@@ -274,6 +307,7 @@ onMounted(() => {
                 <th>UUID</th>
                 <th>Name</th>
                 <th>Recovery Code</th>
+                <th>Last Active</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -297,11 +331,17 @@ onMounted(() => {
                   </template>
                 </td>
                 <td>
+                  {{ client.last_active ? formatDate(client.last_active) : 'Never' }}
+                </td>
+                <td>
                   <div v-if="editingClientId === client.id" class="btn-group btn-group-sm">
                     <button class="btn btn-success" @click="saveEditClient(client.id)">Save</button>
                     <button class="btn btn-secondary" @click="cancelEditClient">Cancel</button>
                   </div>
-                  <button v-else class="btn btn-sm btn-outline-primary" @click="startEditClient(client)">Edit</button>
+                  <div v-else class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" @click="startEditClient(client)">Edit</button>
+                    <button class="btn btn-outline-danger" @click="deleteClient(client.id, client.name)">Delete</button>
+                  </div>
                 </td>
               </tr>
             </tbody>

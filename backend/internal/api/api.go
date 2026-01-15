@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,9 +16,14 @@ import (
 )
 
 type Handler struct {
-	DB          *sql.DB
-	StorageDir  string
-	AdminSecret string
+	DB            *sql.DB
+	StorageDir    string
+	AdminSecret   string
+	VersionConfig []byte
+}
+
+func (h *Handler) GetVersion(c *gin.Context) {
+	c.Data(http.StatusOK, "application/json", h.VersionConfig)
 }
 
 func (h *Handler) isAdmin(c *gin.Context) bool {
@@ -46,15 +52,27 @@ func (h *Handler) GetPersona(c *gin.Context) {
 		if err == nil {
 			name = client.Name
 			recoveryCode = client.RecoveryCode
+			// Update last active time
+			_ = db.UpdateClientLastActive(h.DB, ownerID, time.Now().Unix())
 		}
 	} else if persona == "admin" {
 		name = "Administrator"
+	}
+
+	// Extract version from VersionConfig bytes
+	version := "unknown"
+	var vCfg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(h.VersionConfig, &vCfg); err == nil {
+		version = vCfg.Version
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"persona":       persona,
 		"name":          name,
 		"recovery_code": recoveryCode,
+		"version":       version,
 	})
 }
 
@@ -116,7 +134,7 @@ func (h *Handler) UpdateClientName(c *gin.Context) {
 		recoveryCode = strings.ToUpper(uuid.New().String()[:8])
 	}
 
-	err = db.UpsertClient(h.DB, ownerID, input.Name, recoveryCode)
+	err = db.UpsertClient(h.DB, ownerID, input.Name, recoveryCode, time.Now().Unix())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client name"})
 		return
@@ -346,6 +364,27 @@ func (h *Handler) UpdateClient(c *gin.Context) {
 	err := db.UpdateClient(h.DB, id, input.Name, input.RecoveryCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+func (h *Handler) DeleteClient(c *gin.Context) {
+	if !h.isAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+		return
+	}
+
+	id := c.Param("id")
+	if id == "admin" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete admin persona"})
+		return
+	}
+
+	err := db.DeleteClient(h.DB, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete client"})
 		return
 	}
 
