@@ -34,6 +34,7 @@ type ClientRecord struct {
 	Name         string `json:"name"`
 	RecoveryCode string `json:"recovery_code"`
 	LastActive   int64  `json:"last_active"`
+	IsAdmin      bool   `json:"is_admin"`
 }
 
 func InitDB(dbPath string) (*sql.DB, error) {
@@ -46,76 +47,31 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// Create a files table
-	query := `
-	CREATE TABLE IF NOT EXISTS files (
-		id TEXT PRIMARY KEY,
-		original_name TEXT,
-		stored_path TEXT,
-		size INTEGER,
-		upload_time INTEGER,
-		owner_id TEXT,
-		download_link TEXT
-	);`
-
-	_, err = db.Exec(query)
-	if err != nil {
-		return nil, err
+	// Create tables with full schema
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS files (
+			id TEXT PRIMARY KEY,
+			original_name TEXT,
+			stored_path TEXT,
+			size INTEGER,
+			upload_time INTEGER,
+			owner_id TEXT DEFAULT 'admin',
+			download_link TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS clients (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			recovery_code TEXT UNIQUE,
+			last_active INTEGER,
+			is_admin INTEGER DEFAULT 0
+		);`,
 	}
 
-	// Create clients table
-	query = `
-	CREATE TABLE IF NOT EXISTS clients (
-		id TEXT PRIMARY KEY,
-		name TEXT,
-		recovery_code TEXT UNIQUE,
-		last_active INTEGER
-	);`
-
-	_, err = db.Exec(query)
-	if err != nil {
-		return nil, err
-	}
-
-	// Migrations
-	// Files table migrations
-	fileColumns := map[string]string{
-		"owner_id":      "TEXT",
-		"download_link": "TEXT",
-	}
-
-	for col, colType := range fileColumns {
-		var count int
-		err = db.QueryRow("SELECT count(*) FROM pragma_table_info('files') WHERE name=?", col).Scan(&count)
-		if err == nil && count == 0 {
-			_, err = db.Exec("ALTER TABLE files ADD COLUMN " + col + " " + colType)
-			if err != nil {
-				return nil, err
-			}
+	for _, query := range queries {
+		_, err = db.Exec(query)
+		if err != nil {
+			return nil, err
 		}
-	}
-
-	// Clients table migrations
-	clientColumns := map[string]string{
-		"recovery_code": "TEXT",
-		"last_active":   "INTEGER",
-	}
-
-	for col, colType := range clientColumns {
-		var count int
-		err = db.QueryRow("SELECT count(*) FROM pragma_table_info('clients') WHERE name=?", col).Scan(&count)
-		if err == nil && count == 0 {
-			_, err = db.Exec("ALTER TABLE clients ADD COLUMN " + col + " " + colType)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// Ensure no NULL owner_ids exist
-	_, err = db.Exec("UPDATE files SET owner_id = 'admin' WHERE owner_id IS NULL")
-	if err != nil {
-		return nil, err
 	}
 
 	return db, nil
@@ -226,7 +182,7 @@ func GetFileRecordsByOwner(db *sql.DB, ownerID string) ([]FileRecord, error) {
 
 func UpsertClient(db *sql.DB, id, name, recoveryCode string, lastActive int64) error {
 	query := `INSERT INTO clients (id, name, recovery_code, last_active) VALUES (?, ?, ?, ?) 
-	          ON CONFLICT(id) DO UPDATE SET name=excluded.name, last_active=excluded.last_active`
+	          ON CONFLICT(id) DO UPDATE SET name=excluded.name, last_active=excluded.last_active, recovery_code=excluded.recovery_code`
 	_, err := db.Exec(query, id, name, recoveryCode, lastActive)
 	return err
 }
@@ -243,10 +199,10 @@ func DeleteClient(db *sql.DB, id string) error {
 }
 
 func GetClient(db *sql.DB, id string) (*ClientRecord, error) {
-	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0) FROM clients WHERE id = ?`
+	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0), is_admin FROM clients WHERE id = ?`
 	row := db.QueryRow(query, id)
 	var client ClientRecord
-	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive)
+	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive, &client.IsAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -254,10 +210,10 @@ func GetClient(db *sql.DB, id string) (*ClientRecord, error) {
 }
 
 func GetClientByRecoveryCode(db *sql.DB, code string) (*ClientRecord, error) {
-	query := `SELECT id, name, recovery_code, COALESCE(last_active, 0) FROM clients WHERE recovery_code = ?`
+	query := `SELECT id, name, recovery_code, COALESCE(last_active, 0), is_admin FROM clients WHERE recovery_code = ?`
 	row := db.QueryRow(query, code)
 	var client ClientRecord
-	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive)
+	err := row.Scan(&client.ID, &client.Name, &client.RecoveryCode, &client.LastActive, &client.IsAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +221,7 @@ func GetClientByRecoveryCode(db *sql.DB, code string) (*ClientRecord, error) {
 }
 
 func ListClients(db *sql.DB) ([]ClientRecord, error) {
-	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0) FROM clients ORDER BY name ASC`
+	query := `SELECT id, name, COALESCE(recovery_code, ''), COALESCE(last_active, 0), is_admin FROM clients ORDER BY name ASC`
 	rows, err := db.Query(query)
 	if err != nil {
 		return nil, err
@@ -275,7 +231,7 @@ func ListClients(db *sql.DB) ([]ClientRecord, error) {
 	var clients []ClientRecord
 	for rows.Next() {
 		var c ClientRecord
-		if err := rows.Scan(&c.ID, &c.Name, &c.RecoveryCode, &c.LastActive); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.RecoveryCode, &c.LastActive, &c.IsAdmin); err != nil {
 			return nil, err
 		}
 		clients = append(clients, c)
@@ -283,8 +239,21 @@ func ListClients(db *sql.DB) ([]ClientRecord, error) {
 	return clients, nil
 }
 
-func UpdateClient(db *sql.DB, id string, name string, recoveryCode string) error {
-	query := `UPDATE clients SET name = ?, recovery_code = ? WHERE id = ?`
-	_, err := db.Exec(query, name, recoveryCode, id)
+func UpdateClientAdminStatus(db *sql.DB, id string, isAdmin bool) error {
+	val := 0
+	if isAdmin {
+		val = 1
+	}
+	_, err := db.Exec("UPDATE clients SET is_admin = ? WHERE id = ?", val, id)
+	return err
+}
+
+func UpdateClientFull(db *sql.DB, id string, name string, recoveryCode string, isAdmin bool) error {
+	val := 0
+	if isAdmin {
+		val = 1
+	}
+	query := `UPDATE clients SET name = ?, recovery_code = ?, is_admin = ? WHERE id = ?`
+	_, err := db.Exec(query, name, recoveryCode, val, id)
 	return err
 }

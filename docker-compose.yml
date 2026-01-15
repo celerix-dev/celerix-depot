@@ -1,3 +1,6 @@
+x-common-env: &common-env
+  CELERIX_NAMESPACE: ${CELERIX_NAMESPACE}
+
 services:
   mdns-responder:
     image: flungo/avahi
@@ -17,7 +20,8 @@ services:
       - ./data:/app/data
       - ./data/uploads:/app/data/uploads
     environment:
-      - DB_PATH=/app/data/depot.db
-      - STORAGE_DIR=/app/data/uploads
-      - ADMIN_SECRET=admin123
+      <<: *common-env
+      DB_PATH: /app/data/depot.db
+      STORAGE_DIR: /app/data/uploads
+      ADMIN_SECRET: admin123
     restart: always

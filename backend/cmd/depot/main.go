@@ -12,6 +12,7 @@ import (
 	"github.com/celerix/depot/internal/api"
 	"github.com/celerix/depot/internal/db"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 //go:embed all:dist
@@ -39,6 +40,15 @@ func main() {
 		log.Fatalf("Failed to create storage directory: %v", err)
 	}
 
+	namespaceStr := os.Getenv("CELERIX_NAMESPACE")
+	if namespaceStr == "" {
+		log.Fatal("CELERIX_NAMESPACE environment variable is required")
+	}
+	celerixNamespace, err := uuid.Parse(namespaceStr)
+	if err != nil {
+		log.Fatalf("Failed to parse CELERIX_NAMESPACE as UUID: %v", err)
+	}
+
 	database, err := db.InitDB(dbPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
@@ -46,10 +56,11 @@ func main() {
 	defer database.Close()
 
 	h := &api.Handler{
-		DB:            database,
-		StorageDir:    storageDir,
-		AdminSecret:   os.Getenv("ADMIN_SECRET"),
-		VersionConfig: versionFile,
+		DB:               database,
+		StorageDir:       storageDir,
+		AdminSecret:      os.Getenv("ADMIN_SECRET"),
+		VersionConfig:    versionFile,
+		CelerixNamespace: celerixNamespace,
 	}
 
 	r := gin.Default()
@@ -75,6 +86,7 @@ func main() {
 		apiGroup.GET("/persona", h.GetPersona)
 		apiGroup.POST("/persona/name", h.UpdateClientName)
 		apiGroup.POST("/persona/recover", h.RecoverPersona)
+		apiGroup.POST("/persona/admin", h.ActivateAdmin)
 		apiGroup.POST("/upload", h.UploadFile)
 		apiGroup.GET("/files", h.ListFiles)
 		apiGroup.GET("/files/:id", h.GetFileMetadata)

@@ -18,10 +18,12 @@ interface ClientRecord {
   name: string;
   recovery_code: string;
   last_active: number;
+  is_admin: boolean;
 }
 
 const activeTab = ref<'files' | 'clients'>('files');
 const appVersion = ref('');
+const currentPersonaID = ref('');
 
 // Files management
 const files = ref<FileRecord[]>([]);
@@ -89,7 +91,8 @@ const clients = ref<ClientRecord[]>([]);
 const editingClientId = ref<string | null>(null);
 const clientEditForm = ref({
   name: '',
-  recovery_code: ''
+  recovery_code: '',
+  is_admin: false
 });
 
 const fetchAllClients = async () => {
@@ -112,7 +115,8 @@ const startEditClient = (client: ClientRecord) => {
   editingClientId.value = client.id;
   clientEditForm.value = {
     name: client.name,
-    recovery_code: client.recovery_code
+    recovery_code: client.recovery_code,
+    is_admin: client.is_admin
   };
 };
 
@@ -136,7 +140,8 @@ const saveEditClient = async (id: string) => {
       editingClientId.value = null;
       await fetchAllClients();
     } else {
-      alert('Failed to update client');
+      const data = await response.json().catch(() => ({}));
+      alert(data.error || 'Failed to update client');
     }
   } catch (error) {
     console.error('Error updating client:', error);
@@ -210,6 +215,7 @@ const formatDate = (timestamp: number) => {
 onMounted(async () => {
   const data = await fetchPersona();
   appVersion.value = data.version || '';
+  currentPersonaID.value = getClientID();
   fetchAllFiles();
   fetchAllClients();
 });
@@ -308,6 +314,7 @@ onMounted(async () => {
                 <th>Name</th>
                 <th>Recovery Code</th>
                 <th>Last Active</th>
+                <th>Is Admin</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -332,6 +339,16 @@ onMounted(async () => {
                 </td>
                 <td>
                   {{ client.last_active ? formatDate(client.last_active) : 'Never' }}
+                </td>
+                <td>
+                  <template v-if="editingClientId === client.id">
+                    <input v-model="clientEditForm.is_admin" type="checkbox" class="form-check-input" :disabled="client.id === currentPersonaID" />
+                  </template>
+                  <template v-else>
+                    <span :class="['badge', client.is_admin ? 'bg-danger' : 'bg-secondary']">
+                      {{ client.is_admin ? 'YES' : 'NO' }}
+                    </span>
+                  </template>
                 </td>
                 <td>
                   <div v-if="editingClientId === client.id" class="btn-group btn-group-sm">

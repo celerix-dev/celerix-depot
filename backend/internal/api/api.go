@@ -16,10 +16,11 @@ import (
 )
 
 type Handler struct {
-	DB            *sql.DB
-	StorageDir    string
-	AdminSecret   string
-	VersionConfig []byte
+	DB               *sql.DB
+	StorageDir       string
+	AdminSecret      string
+	VersionConfig    []byte
+	CelerixNamespace uuid.UUID
 }
 
 func (h *Handler) GetVersion(c *gin.Context) {
@@ -27,36 +28,37 @@ func (h *Handler) GetVersion(c *gin.Context) {
 }
 
 func (h *Handler) isAdmin(c *gin.Context) bool {
-	// First, check the secret header
-	secret := c.GetHeader("X-Admin-Secret")
-	if h.AdminSecret != "" && secret == h.AdminSecret {
-		return true
+	ownerID := c.GetHeader("X-Client-ID")
+	if ownerID == "" {
+		return false
 	}
-	// Fallback to localhost for convenience during development,
-	// but the secret is the primary way now.
-	ip := c.ClientIP()
-	return ip == "127.0.0.1" || ip == "::1"
+	client, err := db.GetClient(h.DB, ownerID)
+	if err != nil {
+		return false
+	}
+	return client.IsAdmin
 }
 
 func (h *Handler) GetPersona(c *gin.Context) {
 	ownerID := c.GetHeader("X-Client-ID")
-	persona := "client"
-	if h.isAdmin(c) {
-		persona = "admin"
-	}
 
 	name := ""
 	recoveryCode := ""
+	isAdmin := false
 	if ownerID != "" {
 		client, err := db.GetClient(h.DB, ownerID)
 		if err == nil {
 			name = client.Name
 			recoveryCode = client.RecoveryCode
+			isAdmin = client.IsAdmin
 			// Update last active time
 			_ = db.UpdateClientLastActive(h.DB, ownerID, time.Now().Unix())
 		}
-	} else if persona == "admin" {
-		name = "Administrator"
+	}
+
+	persona := "client"
+	if isAdmin {
+		persona = "admin"
 	}
 
 	// Extract version from VersionConfig bytes
@@ -76,22 +78,42 @@ func (h *Handler) GetPersona(c *gin.Context) {
 	})
 }
 
-func (h *Handler) RecoverPersona(c *gin.Context) {
+func (h *Handler) ActivateAdmin(c *gin.Context) {
+	ownerID := c.GetHeader("X-Client-ID")
+	if ownerID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Client-ID header is required"})
+		return
+	}
+
 	var input struct {
-		Code string `json:"code" binding:"required"`
+		Secret string `json:"secret" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Check if it's the admin secret
-	if h.AdminSecret != "" && input.Code == h.AdminSecret {
-		c.JSON(http.StatusOK, gin.H{
-			"persona": "admin",
-			"id":      "admin",
-			"name":    "Administrator",
-		})
+	if h.AdminSecret == "" || input.Secret != h.AdminSecret {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Invalid admin secret"})
+		return
+	}
+
+	// Flag the current client as admin in DB
+	err := db.UpdateClientAdminStatus(h.DB, ownerID, true)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to activate admin status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+func (h *Handler) RecoverPersona(c *gin.Context) {
+	var input struct {
+		Code string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -102,9 +124,17 @@ func (h *Handler) RecoverPersona(c *gin.Context) {
 		return
 	}
 
+	// Verify ID consistency (it should always match the derived one)
+	deterministicID := uuid.NewSHA1(h.CelerixNamespace, []byte(client.RecoveryCode)).String()
+
+	persona := "client"
+	if client.IsAdmin {
+		persona = "admin"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"persona": "client",
-		"id":      client.ID,
+		"persona": persona,
+		"id":      deterministicID,
 		"name":    client.Name,
 	})
 }
@@ -134,14 +164,19 @@ func (h *Handler) UpdateClientName(c *gin.Context) {
 		recoveryCode = strings.ToUpper(uuid.New().String()[:8])
 	}
 
-	err = db.UpsertClient(h.DB, ownerID, input.Name, recoveryCode, time.Now().Unix())
+	// NEW: Derived Client ID based on recovery code and Celerix namespace
+	deterministicID := uuid.NewSHA1(h.CelerixNamespace, []byte(recoveryCode)).String()
+
+	err = db.UpsertClient(h.DB, deterministicID, input.Name, recoveryCode, time.Now().Unix())
 	if err != nil {
+		log.Printf("[ERROR] Failed to upsert client: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client name"})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":        "success",
+		"id":            deterministicID,
 		"recovery_code": recoveryCode,
 	})
 }
@@ -155,12 +190,9 @@ func (h *Handler) UploadFile(c *gin.Context) {
 	defer file.Close()
 
 	ownerID := c.GetHeader("X-Client-ID")
-	if ownerID == "" && !h.isAdmin(c) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Client-ID header is required for clients"})
+	if ownerID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Client-ID header is required"})
 		return
-	}
-	if h.isAdmin(c) && ownerID == "" {
-		ownerID = "admin"
 	}
 
 	id := uuid.New().String()
@@ -354,6 +386,7 @@ func (h *Handler) UpdateClient(c *gin.Context) {
 	var input struct {
 		Name         string `json:"name" binding:"required"`
 		RecoveryCode string `json:"recovery_code" binding:"required"`
+		IsAdmin      bool   `json:"is_admin"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -361,7 +394,14 @@ func (h *Handler) UpdateClient(c *gin.Context) {
 		return
 	}
 
-	err := db.UpdateClient(h.DB, id, input.Name, input.RecoveryCode)
+	// Protection: Admin cannot remove the flag from itself
+	currentAdminID := c.GetHeader("X-Client-ID")
+	if id == currentAdminID && !input.IsAdmin {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove admin status from yourself"})
+		return
+	}
+
+	err := db.UpdateClientFull(h.DB, id, input.Name, input.RecoveryCode, input.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client"})
 		return

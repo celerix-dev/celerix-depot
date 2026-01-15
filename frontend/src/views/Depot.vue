@@ -2,7 +2,7 @@
 import FileUploader from '@/components/FileUploader.vue';
 import FileList from '@/components/FileList.vue';
 import { onMounted, ref } from 'vue';
-import { fetchPersona, updateClientName, setAdminSecret, recoverPersona } from '@/utils/persona';
+import { fetchPersona, updateClientName, activateAdmin, recoverPersona } from '@/utils/persona';
 
 import logo from '@/assets/celerix-logo.png';
 
@@ -43,14 +43,19 @@ const saveName = async () => {
 
 const loginAdmin = async () => {
   if (adminSecret.value.trim()) {
-    setAdminSecret(adminSecret.value.trim());
-    const data = await fetchPersona();
-    persona.value = data.persona;
-    clientName.value = data.name;
-    recoveryCode.value = data.recovery_code || '';
-    showAdminModal.value = false;
-    if (fileListRef.value) {
-      fileListRef.value.fetchFiles();
+    const result = await activateAdmin(adminSecret.value.trim());
+    if (result.success) {
+      const data = await fetchPersona();
+      persona.value = data.persona;
+      clientName.value = data.name;
+      recoveryCode.value = data.recovery_code || '';
+      showAdminModal.value = false;
+      adminSecret.value = '';
+      if (fileListRef.value) {
+        fileListRef.value.fetchFiles();
+      }
+    } else {
+      alert('Invalid admin secret.');
     }
   }
 };

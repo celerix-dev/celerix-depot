@@ -30,18 +30,21 @@ func TestPersonaRecovery(t *testing.T) {
 	defer database.Close()
 
 	h := &Handler{
-		DB:          database,
-		StorageDir:  storageDir,
-		AdminSecret: "supersecret",
+		DB:               database,
+		StorageDir:       storageDir,
+		AdminSecret:      "supersecret",
+		CelerixNamespace: uuid.MustParse("c01e6180-2026-4d21-828a-7239842a2222"),
 	}
 
 	r := gin.New()
 	r.GET("/persona", h.GetPersona)
 	r.POST("/persona/name", h.UpdateClientName)
 	r.POST("/persona/recover", h.RecoverPersona)
+	r.POST("/persona/admin", h.ActivateAdmin)
 
 	// 1. Create a client
-	clientID := uuid.New().String()
+	clientID := "test-client-id"
+	// No prior UpsertClient to avoid UNIQUE constraint conflicts in this test
 	name := "Recovery Test User"
 	body, _ := json.Marshal(gin.H{"name": name})
 	req, _ := http.NewRequest("POST", "/persona/name", strings.NewReader(string(body)))
@@ -54,13 +57,12 @@ func TestPersonaRecovery(t *testing.T) {
 	}
 
 	var updateResp struct {
+		ID           string `json:"id"`
 		RecoveryCode string `json:"recovery_code"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &updateResp)
 	recoveryCode := updateResp.RecoveryCode
-	if recoveryCode == "" {
-		t.Fatal("Recovery code not returned in UpdateClientName")
-	}
+	deterministicID := updateResp.ID
 
 	// 2. Recover using the code
 	recoverBody, _ := json.Marshal(gin.H{"code": recoveryCode})
@@ -79,31 +81,38 @@ func TestPersonaRecovery(t *testing.T) {
 	}
 	json.Unmarshal(wRec.Body.Bytes(), &recoverResp)
 
-	if recoverResp.Persona != "client" || recoverResp.ID != clientID || recoverResp.Name != name {
+	if recoverResp.Persona != "client" || recoverResp.ID != deterministicID || recoverResp.Name != name {
 		t.Errorf("Recovered data mismatch: %+v", recoverResp)
 	}
 
-	// 3. Recover admin using secret
-	adminRecoverBody, _ := json.Marshal(gin.H{"code": "supersecret"})
-	reqAdmin, _ := http.NewRequest("POST", "/persona/recover", strings.NewReader(string(adminRecoverBody)))
+	// 3. Promote to Admin
+	adminBody, _ := json.Marshal(gin.H{"secret": "supersecret"})
+	reqAdmin, _ := http.NewRequest("POST", "/persona/admin", strings.NewReader(string(adminBody)))
+	reqAdmin.Header.Set("X-Client-ID", deterministicID)
 	wAdmin := httptest.NewRecorder()
 	r.ServeHTTP(wAdmin, reqAdmin)
 
 	if wAdmin.Code != http.StatusOK {
-		t.Fatalf("Admin recover failed: %s", wAdmin.Body.String())
+		t.Fatalf("Admin activation failed: %s", wAdmin.Body.String())
 	}
 
-	var adminRecoverResp struct {
+	// 4. Verify GetPersona returns admin
+	reqGet, _ := http.NewRequest("GET", "/persona", nil)
+	reqGet.Header.Set("X-Client-ID", deterministicID)
+	wGet := httptest.NewRecorder()
+	r.ServeHTTP(wGet, reqGet)
+
+	var getResp struct {
 		Persona string `json:"persona"`
 	}
-	json.Unmarshal(wAdmin.Body.Bytes(), &adminRecoverResp)
-	if adminRecoverResp.Persona != "admin" {
-		t.Errorf("Expected admin persona, got %s", adminRecoverResp.Persona)
+	json.Unmarshal(wGet.Body.Bytes(), &getResp)
+	if getResp.Persona != "admin" {
+		t.Errorf("Expected admin persona, got %s", getResp.Persona)
 	}
 
-	// 4. Delete client
-	reqDel, _ := http.NewRequest("DELETE", "/clients/"+clientID, nil)
-	reqDel.Header.Set("X-Admin-Secret", "supersecret")
+	// 5. Delete client
+	reqDel, _ := http.NewRequest("DELETE", "/clients/"+deterministicID, nil)
+	reqDel.Header.Set("X-Client-ID", deterministicID) // Admin status is now attached to the client ID
 	wDel := httptest.NewRecorder()
 	r.DELETE("/clients/:id", h.DeleteClient)
 	r.ServeHTTP(wDel, reqDel)
@@ -208,8 +217,11 @@ func TestDeleteFile(t *testing.T) {
 	json.Unmarshal(w2.Body.Bytes(), &uploadResp2)
 	fileID2 := uploadResp2.ID
 
+	// Promote client to admin first
+	db.UpdateClientAdminStatus(database, clientID, true)
+
 	reqDelAdmin, _ := http.NewRequest("DELETE", "/files/"+fileID2, nil)
-	reqDelAdmin.Header.Set("X-Admin-Secret", "admin")
+	reqDelAdmin.Header.Set("X-Client-ID", clientID)
 	wDelAdmin := httptest.NewRecorder()
 	r.ServeHTTP(wDelAdmin, reqDelAdmin)
 
@@ -244,6 +256,7 @@ func TestUploadAndListFiles(t *testing.T) {
 	clientID := "test-client-1"
 
 	// 1. Upload a file
+	db.UpsertClient(database, clientID, "Test User", "RECOVERY", 0)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "test_list.txt")
@@ -279,8 +292,11 @@ func TestUploadAndListFiles(t *testing.T) {
 	}
 
 	// 3. List files as admin
+	// Promote client to admin first
+	db.UpdateClientAdminStatus(database, clientID, true)
+
 	reqAdmin, _ := http.NewRequest("GET", "/files", nil)
-	reqAdmin.RemoteAddr = "127.0.0.1:1234"
+	reqAdmin.Header.Set("X-Client-ID", clientID)
 	wAdmin := httptest.NewRecorder()
 	r.ServeHTTP(wAdmin, reqAdmin)
 
@@ -296,12 +312,12 @@ func TestUploadAndListFiles(t *testing.T) {
 		t.Errorf("Expected at least one record for admin, got 0")
 	}
 
-	// 4. Test NULL owner_id migration simulation
-	// Insert a record with NULL owner_id manually
-	_, err = database.Exec("INSERT INTO files (id, original_name, stored_path, size, upload_time, owner_id) VALUES (?, ?, ?, ?, ?, NULL)",
-		"null-owner-id", "null_test.txt", "/tmp/null", 100, 1000)
+	// 4. Test missing/default owner_id
+	// Insert a record without owner_id (relying on DEFAULT 'admin')
+	_, err = database.Exec("INSERT INTO files (id, original_name, stored_path, size, upload_time) VALUES (?, ?, ?, ?, ?)",
+		"default-owner-id", "default_test.txt", "/tmp/default", 100, 1000)
 	if err != nil {
-		t.Fatalf("Failed to insert NULL owner record: %v", err)
+		t.Fatalf("Failed to insert default owner record: %v", err)
 	}
 
 	// List files again, it should not fail now
@@ -314,17 +330,17 @@ func TestUploadAndListFiles(t *testing.T) {
 	var responseAdmin2 db.FileListResponse
 	json.Unmarshal(wAdmin2.Body.Bytes(), &responseAdmin2)
 	adminRecords2 := responseAdmin2.Files
-	foundNull := false
+	foundDefault := false
 	for _, rec := range adminRecords2 {
-		if rec.ID == "null-owner-id" {
-			foundNull = true
+		if rec.ID == "default-owner-id" {
+			foundDefault = true
 			if rec.OwnerID != "admin" {
-				t.Errorf("Expected COALESCE to return 'admin' for NULL owner_id, got %s", rec.OwnerID)
+				t.Errorf("Expected owner_id to be 'admin' for default record, got %s", rec.OwnerID)
 			}
 		}
 	}
-	if !foundNull {
-		t.Errorf("Did not find the record that had NULL owner_id")
+	if !foundDefault {
+		t.Errorf("Did not find the record that had default owner_id")
 	}
 
 	// 5. Test with mixed IPs (non-local)

@@ -14,15 +14,36 @@ export const setClientID = (id: string) => {
 };
 
 export const getAdminSecret = (): string => {
-  return localStorage.getItem('depot_admin_secret') || '';
+  return '';
 };
 
 export const setAdminSecret = (secret: string) => {
-  localStorage.setItem('depot_admin_secret', secret);
+  // We no longer store the secret, we just use it once to activate admin
 };
 
 export const clearAdminSecret = () => {
-  localStorage.removeItem('depot_admin_secret');
+  // No-op
+};
+
+export const activateAdmin = async (secret: string): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const response = await fetch('/api/persona/admin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Client-ID': getClientID(),
+      },
+      body: JSON.stringify({ secret }),
+    });
+    if (response.ok) {
+      return { success: true };
+    }
+    const data = await response.json();
+    return { success: false, error: data.error };
+  } catch (error) {
+    console.error('Error activating admin:', error);
+    return { success: false, error: 'Network error' };
+  }
 };
 
 export interface PersonaData {
@@ -49,7 +70,7 @@ export const fetchPersona = async (): Promise<PersonaData> => {
   return { persona: 'client', name: '' };
 };
 
-export const updateClientName = async (name: string): Promise<{ success: boolean; recovery_code?: string }> => {
+export const updateClientName = async (name: string): Promise<{ success: boolean; id?: string; recovery_code?: string }> => {
   try {
     const response = await fetch('/api/persona/name', {
       method: 'POST',
@@ -62,7 +83,10 @@ export const updateClientName = async (name: string): Promise<{ success: boolean
     });
     if (response.ok) {
       const data = await response.json();
-      return { success: true, recovery_code: data.recovery_code };
+      if (data.id) {
+        setClientID(data.id);
+      }
+      return { success: true, id: data.id, recovery_code: data.recovery_code };
     }
     return { success: false };
   } catch (error) {
@@ -82,12 +106,7 @@ export const recoverPersona = async (code: string): Promise<{ success: boolean; 
     });
     if (response.ok) {
       const data = await response.json();
-      if (data.persona === 'admin') {
-        setAdminSecret(code);
-      } else {
-        setClientID(data.id);
-        clearAdminSecret(); // Ensure we don't have a stale admin secret if we recovered a client
-      }
+      setClientID(data.id);
       return { success: true, persona: data.persona, name: data.name };
     }
     return { success: false };
