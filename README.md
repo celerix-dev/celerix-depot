@@ -63,7 +63,7 @@ docker-compose up -d
 | `STORAGE_DIR`       | Directory for file uploads.       | `/app/data/uploads`  |
 | `ADMIN_SECRET`      | Key to activate Admin Persona.    | `admin123`           |
 
-*Note: **CELERIX_NAMESPACE** must be a valid UUID and needs to be the same across all services within the docker-compose cluster.*
+*Note: **CELERIX_NAMESPACE** must be a valid UUID and needs to be the same across all celerix services within the docker-compose cluster.*
 ## 🛠️ Build & Development
 
 If you want to modify the code or build locally:
