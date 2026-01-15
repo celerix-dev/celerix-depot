@@ -6,6 +6,10 @@
 
 Celerix Depot is a lightweight, self-hosted file sharing service designed for "homelab" use. It allows users to easily upload, store, and share files through a clean, persona-based web interface.
 
+<p align="center">
+   <img src="https://raw.githubusercontent.com/celerix-dev/celerix-depot/main/assets/celerix-depot.png" width="600" alt="Celerix Depot" />
+</p>
+
 ## 🚀 Features
 
 - **Multi-Arch Support**: Native images for `amd64` (PC/Server) and `arm64` (Apple Silicon/Raspberry Pi).
