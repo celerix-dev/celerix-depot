@@ -40,7 +40,6 @@ services:
       - ./data/uploads:/app/data/uploads
     environment:
       - CELERIX_NAMESPACE={a-random-uuid}
-      - DB_PATH=/app/data/depot.db
       - STORAGE_DIR=/app/data/uploads
       - ADMIN_SECRET=your-secret-key-here
     restart: unless-stopped
@@ -59,7 +58,7 @@ docker-compose up -d
 |---------------------|-----------------------------------|----------------------|
 | `CELERIX_NAMESPACE` | Unique namespace for the service. | a random uuid        |
 | `PORT`              | The port the service listens on.  | `8080`               |
-| `DB_PATH`           | Path to the SQLite database.      | `/app/data/depot.db` |
+| `DATA_DIR`           | Path to store Celerix Store data. | `/app/data`          |
 | `STORAGE_DIR`       | Directory for file uploads.       | `/app/data/uploads`  |
 | `ADMIN_SECRET`      | Key to activate Admin Persona.    | `admin123`           |
 

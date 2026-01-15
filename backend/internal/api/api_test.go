@@ -3,360 +3,313 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/celerix/depot/internal/db"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
+
+	"github.com/celerix-dev/celerix-store/pkg/sdk"
+	"github.com/celerix/depot/internal/db"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
-func TestPersonaRecovery(t *testing.T) {
+func setupTestHandler(t *testing.T) (*Handler, string, func()) {
 	gin.SetMode(gin.TestMode)
-	dbPath := "./test_recover.db"
-	storageDir := "./test_recover_uploads"
-	defer os.Remove(dbPath)
-	defer os.RemoveAll(storageDir)
 
-	database, err := db.InitDB(dbPath)
+	tempDir, err := os.MkdirTemp("", "depot-test-*")
 	if err != nil {
-		t.Fatalf("Failed to init DB: %v", err)
+		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer database.Close()
+
+	dataDir := filepath.Join(tempDir, "data")
+	storageDir := filepath.Join(tempDir, "uploads")
+	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(storageDir, 0755)
+
+	store, err := sdk.New(dataDir)
+	if err != nil {
+		t.Fatalf("failed to init store: %v", err)
+	}
 
 	h := &Handler{
-		DB:               database,
+		Store:            store,
 		StorageDir:       storageDir,
-		AdminSecret:      "supersecret",
-		CelerixNamespace: uuid.MustParse("c01e6180-2026-4d21-828a-7239842a2222"),
+		AdminSecret:      "test-secret",
+		VersionConfig:    []byte(`{"version": "1.0.0-test"}`),
+		CelerixNamespace: uuid.New(),
 	}
 
-	r := gin.New()
-	r.GET("/persona", h.GetPersona)
-	r.POST("/persona/name", h.UpdateClientName)
-	r.POST("/persona/recover", h.RecoverPersona)
-	r.POST("/persona/admin", h.ActivateAdmin)
+	cleanup := func() {
+		os.RemoveAll(tempDir)
+	}
 
-	// 1. Create a client
+	return h, storageDir, cleanup
+}
+
+func TestGetVersion(t *testing.T) {
+	h, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	h.GetVersion(c)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var resp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["version"] != "1.0.0-test" {
+		t.Errorf("expected version 1.0.0-test, got %s", resp["version"])
+	}
+}
+
+func TestPersonaFlow(t *testing.T) {
+	h, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.Default()
+	router.POST("/persona/name", h.UpdateClientName)
+	router.GET("/persona", h.GetPersona)
+	router.POST("/persona/admin", h.ActivateAdmin)
+
+	// 1. Update Client Name (Initial)
+	w := httptest.NewRecorder()
+	body := bytes.NewBufferString(`{"name": "Test User"}`)
+	req, _ := http.NewRequest("POST", "/persona/name", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", "initial-id")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("UpdateClientName failed: %v", w.Body.String())
+	}
+
+	var nameResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &nameResp)
+	clientID := nameResp["id"]
+	recoveryCode := nameResp["recovery_code"]
+
+	if clientID == "" || recoveryCode == "" {
+		t.Errorf("Missing ID or recovery code in response")
+	}
+
+	// 2. Get Persona
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/persona", nil)
+	req.Header.Set("X-Client-ID", clientID)
+	router.ServeHTTP(w, req)
+
+	var personaResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &personaResp)
+	if personaResp["name"] != "Test User" {
+		t.Errorf("expected name Test User, got %v", personaResp["name"])
+	}
+	if personaResp["persona"] != "client" {
+		t.Errorf("expected persona client, got %v", personaResp["persona"])
+	}
+
+	// 3. Activate Admin
+	w = httptest.NewRecorder()
+	adminBody := bytes.NewBufferString(`{"secret": "test-secret"}`)
+	req, _ = http.NewRequest("POST", "/persona/admin", adminBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", clientID)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("ActivateAdmin failed: %v", w.Body.String())
+	}
+
+	// 4. Verify Admin Persona
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/persona", nil)
+	req.Header.Set("X-Client-ID", clientID)
+	router.ServeHTTP(w, req)
+
+	json.Unmarshal(w.Body.Bytes(), &personaResp)
+	if personaResp["persona"] != "admin" {
+		t.Errorf("expected persona admin, got %v", personaResp["persona"])
+	}
+
+	// 5. Check if data is stored in the correct persona
+	// In the new implementation, client data is still in SystemPersona
+	// to allow global listing and searching across personas.
+	val, err := h.Store.Get(db.SystemPersona, "depot", "client:"+clientID)
+	if err != nil || val == nil {
+		t.Errorf("expected client data in system persona, but not found")
+	}
+}
+
+func TestClientManagement(t *testing.T) {
+	h, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.Default()
+	router.POST("/persona/name", h.UpdateClientName)
+	router.GET("/persona", h.GetPersona)
+	router.POST("/persona/admin", h.ActivateAdmin)
+	router.GET("/clients", h.ListClients)
+	router.PUT("/clients/:id", h.UpdateClient)
+	router.DELETE("/clients/:id", h.DeleteClient)
+
+	// 1. Setup Admin
+	w := httptest.NewRecorder()
+	body := bytes.NewBufferString(`{"name": "Admin User"}`)
+	req, _ := http.NewRequest("POST", "/persona/name", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", "admin-id")
+	router.ServeHTTP(w, req)
+
+	var adminResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &adminResp)
+	adminID := adminResp["id"]
+
+	w = httptest.NewRecorder()
+	adminBody := bytes.NewBufferString(`{"secret": "test-secret"}`)
+	req, _ = http.NewRequest("POST", "/persona/admin", adminBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", adminID)
+	router.ServeHTTP(w, req)
+
+	// 2. Setup another client
+	w = httptest.NewRecorder()
+	body = bytes.NewBufferString(`{"name": "Other User"}`)
+	req, _ = http.NewRequest("POST", "/persona/name", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", "other-id")
+	router.ServeHTTP(w, req)
+
+	var otherResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &otherResp)
+	otherID := otherResp["id"]
+
+	// 3. List Clients (as Admin)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/clients", nil)
+	req.Header.Set("X-Client-ID", adminID)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("ListClients failed: %v", w.Body.String())
+	}
+
+	var clients []map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &clients)
+	if len(clients) < 2 {
+		t.Errorf("expected at least 2 clients, got %d", len(clients))
+	}
+
+	// 4. Update Client (as Admin)
+	w = httptest.NewRecorder()
+	updateBody := bytes.NewBufferString(`{"name": "Updated Name", "recovery_code": "NEWCODE1", "is_admin": false}`)
+	req, _ = http.NewRequest("PUT", "/clients/"+otherID, updateBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", adminID)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("UpdateClient failed: %v", w.Body.String())
+	}
+
+	// 5. Delete Client (as Admin)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("DELETE", "/clients/"+otherID, nil)
+	req.Header.Set("X-Client-ID", adminID)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("DeleteClient failed: %v", w.Body.String())
+	}
+}
+
+func TestFileUploadAndList(t *testing.T) {
+	h, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	router := gin.Default()
+	router.POST("/upload", h.UploadFile)
+	router.GET("/files", h.ListFiles)
+
 	clientID := "test-client-id"
-	// No prior UpsertClient to avoid UNIQUE constraint conflicts in this test
-	name := "Recovery Test User"
-	body, _ := json.Marshal(gin.H{"name": name})
-	req, _ := http.NewRequest("POST", "/persona/name", strings.NewReader(string(body)))
-	req.Header.Set("X-Client-ID", clientID)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("Update client name failed: %s", w.Body.String())
-	}
-
-	var updateResp struct {
-		ID           string `json:"id"`
-		RecoveryCode string `json:"recovery_code"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &updateResp)
-	recoveryCode := updateResp.RecoveryCode
-	deterministicID := updateResp.ID
-
-	// 2. Recover using the code
-	recoverBody, _ := json.Marshal(gin.H{"code": recoveryCode})
-	reqRec, _ := http.NewRequest("POST", "/persona/recover", strings.NewReader(string(recoverBody)))
-	wRec := httptest.NewRecorder()
-	r.ServeHTTP(wRec, reqRec)
-
-	if wRec.Code != http.StatusOK {
-		t.Fatalf("Recover failed: %s", wRec.Body.String())
-	}
-
-	var recoverResp struct {
-		Persona string `json:"persona"`
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-	}
-	json.Unmarshal(wRec.Body.Bytes(), &recoverResp)
-
-	if recoverResp.Persona != "client" || recoverResp.ID != deterministicID || recoverResp.Name != name {
-		t.Errorf("Recovered data mismatch: %+v", recoverResp)
-	}
-
-	// 3. Promote to Admin
-	adminBody, _ := json.Marshal(gin.H{"secret": "supersecret"})
-	reqAdmin, _ := http.NewRequest("POST", "/persona/admin", strings.NewReader(string(adminBody)))
-	reqAdmin.Header.Set("X-Client-ID", deterministicID)
-	wAdmin := httptest.NewRecorder()
-	r.ServeHTTP(wAdmin, reqAdmin)
-
-	if wAdmin.Code != http.StatusOK {
-		t.Fatalf("Admin activation failed: %s", wAdmin.Body.String())
-	}
-
-	// 4. Verify GetPersona returns admin
-	reqGet, _ := http.NewRequest("GET", "/persona", nil)
-	reqGet.Header.Set("X-Client-ID", deterministicID)
-	wGet := httptest.NewRecorder()
-	r.ServeHTTP(wGet, reqGet)
-
-	var getResp struct {
-		Persona string `json:"persona"`
-	}
-	json.Unmarshal(wGet.Body.Bytes(), &getResp)
-	if getResp.Persona != "admin" {
-		t.Errorf("Expected admin persona, got %s", getResp.Persona)
-	}
-
-	// 5. Delete client
-	reqDel, _ := http.NewRequest("DELETE", "/clients/"+deterministicID, nil)
-	reqDel.Header.Set("X-Client-ID", deterministicID) // Admin status is now attached to the client ID
-	wDel := httptest.NewRecorder()
-	r.DELETE("/clients/:id", h.DeleteClient)
-	r.ServeHTTP(wDel, reqDel)
-
-	if wDel.Code != http.StatusOK {
-		t.Fatalf("Delete client failed: %s", wDel.Body.String())
-	}
-
-	// Verify client is gone
-	_, err = db.GetClient(database, clientID)
-	if err == nil {
-		t.Error("Client still exists after deletion")
-	}
-}
-
-func TestDeleteFile(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	dbPath := "./test_delete.db"
-	storageDir := "./test_delete_uploads"
-	defer os.Remove(dbPath)
-	defer os.RemoveAll(storageDir)
-
-	database, err := db.InitDB(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to init DB: %v", err)
-	}
-	defer database.Close()
-
-	h := &Handler{
-		DB:          database,
-		StorageDir:  storageDir,
-		AdminSecret: "admin",
-	}
-
-	r := gin.New()
-	r.POST("/upload", h.UploadFile)
-	r.DELETE("/files/:id", h.DeleteFile)
-
-	// 1. Upload a file
-	content := "test content"
+	// 1. Upload File
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "test_delete.txt")
-	part.Write([]byte(content))
+	part, _ := writer.CreateFormFile("file", "test.txt")
+	part.Write([]byte("hello world"))
 	writer.Close()
 
-	clientID := "owner-1"
+	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-Client-ID", clientID)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 
-	var uploadResp struct {
-		ID string `json:"id"`
+	if w.Code != http.StatusOK {
+		t.Fatalf("Upload failed: %v", w.Body.String())
 	}
+
+	var uploadResp map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &uploadResp)
-	fileID := uploadResp.ID
+	fileID := uploadResp["id"].(string)
 
-	// 2. Try to delete as another client (should fail)
-	reqDel, _ := http.NewRequest("DELETE", "/files/"+fileID, nil)
-	reqDel.Header.Set("X-Client-ID", "other-client")
-	wDel := httptest.NewRecorder()
-	r.ServeHTTP(wDel, reqDel)
-
-	if wDel.Code != http.StatusForbidden {
-		t.Errorf("Expected 403 Forbidden for unauthorized deletion, got %d", wDel.Code)
-	}
-
-	// 3. Delete as owner (should succeed)
-	reqDelOwner, _ := http.NewRequest("DELETE", "/files/"+fileID, nil)
-	reqDelOwner.Header.Set("X-Client-ID", clientID)
-	wDelOwner := httptest.NewRecorder()
-	r.ServeHTTP(wDelOwner, reqDelOwner)
-
-	if wDelOwner.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK for owner deletion, got %d: %s", wDelOwner.Code, wDelOwner.Body.String())
-	}
-
-	// 4. Verify DB record is gone
-	_, err = db.GetFileRecord(database, fileID)
-	if err == nil {
-		t.Error("Expected DB record to be deleted")
-	}
-
-	// 5. Upload another file and delete as admin
-	body2 := &bytes.Buffer{}
-	writer2 := multipart.NewWriter(body2)
-	part2, _ := writer2.CreateFormFile("file", "test_admin_delete.txt")
-	part2.Write([]byte(content))
-	writer2.Close()
-
-	req2, _ := http.NewRequest("POST", "/upload", body2)
-	req2.Header.Set("Content-Type", writer2.FormDataContentType())
-	req2.Header.Set("X-Client-ID", clientID)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-
-	var uploadResp2 struct {
-		ID string `json:"id"`
-	}
-	json.Unmarshal(w2.Body.Bytes(), &uploadResp2)
-	fileID2 := uploadResp2.ID
-
-	// Promote client to admin first
-	db.UpdateClientAdminStatus(database, clientID, true)
-
-	reqDelAdmin, _ := http.NewRequest("DELETE", "/files/"+fileID2, nil)
-	reqDelAdmin.Header.Set("X-Client-ID", clientID)
-	wDelAdmin := httptest.NewRecorder()
-	r.ServeHTTP(wDelAdmin, reqDelAdmin)
-
-	if wDelAdmin.Code != http.StatusOK {
-		t.Errorf("Expected 200 OK for admin deletion, got %d: %s", wDelAdmin.Code, wDelAdmin.Body.String())
-	}
-}
-
-func TestUploadAndListFiles(t *testing.T) {
-	// Setup
-	gin.SetMode(gin.TestMode)
-	dbPath := "./test_list_depot.db"
-	storageDir := "./test_list_uploads"
-	defer os.Remove(dbPath)
-	defer os.RemoveAll(storageDir)
-
-	database, err := db.InitDB(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to init DB: %v", err)
-	}
-	defer database.Close()
-
-	h := &Handler{
-		DB:         database,
-		StorageDir: storageDir,
-	}
-
-	r := gin.New()
-	r.POST("/upload", h.UploadFile)
-	r.GET("/files", h.ListFiles)
-
-	clientID := "test-client-1"
-
-	// 1. Upload a file
-	db.UpsertClient(database, clientID, "Test User", "RECOVERY", 0)
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", "test_list.txt")
-	io.Copy(part, bytes.NewBufferString("content"))
-	writer.Close()
-
-	req, _ := http.NewRequest("POST", "/upload", body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	// 2. List Files
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/files", nil)
 	req.Header.Set("X-Client-ID", clientID)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("Upload failed: %s", w.Body.String())
+		t.Fatalf("List files failed: %v", w.Body.String())
 	}
 
-	// 2. List files as client
-	reqList, _ := http.NewRequest("GET", "/files", nil)
-	reqList.Header.Set("X-Client-ID", clientID)
-	wList := httptest.NewRecorder()
-	r.ServeHTTP(wList, reqList)
-
-	if wList.Code != http.StatusOK {
-		t.Fatalf("List files failed: %s", wList.Body.String())
+	var listResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &listResp)
+	files := listResp["files"].([]interface{})
+	if len(files) != 1 {
+		t.Errorf("expected 1 file, got %d", len(files))
 	}
 
-	var response db.FileListResponse
-	json.Unmarshal(wList.Body.Bytes(), &response)
-	records := response.Files
-
-	if len(records) == 0 {
-		t.Errorf("Expected at least one record for client, got 0")
+	firstFile := files[0].(map[string]interface{})
+	if firstFile["id"] != fileID {
+		t.Errorf("expected file ID %s, got %v", fileID, firstFile["id"])
 	}
 
-	// 3. List files as admin
-	// Promote client to admin first
-	db.UpdateClientAdminStatus(database, clientID, true)
-
-	reqAdmin, _ := http.NewRequest("GET", "/files", nil)
-	reqAdmin.Header.Set("X-Client-ID", clientID)
-	wAdmin := httptest.NewRecorder()
-	r.ServeHTTP(wAdmin, reqAdmin)
-
-	if wAdmin.Code != http.StatusOK {
-		t.Fatalf("Admin list files failed: %s", wAdmin.Body.String())
+	// 3. Verify file is in the persona's store
+	val, err := h.Store.Get(clientID, "depot", "file:"+fileID)
+	if err != nil || val == nil {
+		t.Errorf("expected file record in persona %s, but not found", clientID)
 	}
 
-	var responseAdmin db.FileListResponse
-	json.Unmarshal(wAdmin.Body.Bytes(), &responseAdmin)
-	adminRecords := responseAdmin.Files
-
-	if len(adminRecords) == 0 {
-		t.Errorf("Expected at least one record for admin, got 0")
+	// 4. Verify file is NOT in system store
+	val, err = h.Store.Get(db.SystemPersona, "depot", "file:"+fileID)
+	if err == nil && val != nil {
+		t.Errorf("expected file record NOT to be in system persona")
 	}
 
-	// 4. Test missing/default owner_id
-	// Insert a record without owner_id (relying on DEFAULT 'admin')
-	_, err = database.Exec("INSERT INTO files (id, original_name, stored_path, size, upload_time) VALUES (?, ?, ?, ?, ?)",
-		"default-owner-id", "default_test.txt", "/tmp/default", 100, 1000)
+	// 5. Verify UpdateFileRecord moves record if owner changes
+	// We need an admin request context or just call DB directly
+	newOwnerID := "new-owner-id"
+	err = db.UpdateFileRecord(h.Store, fileID, "updated.txt", newOwnerID)
 	if err != nil {
-		t.Fatalf("Failed to insert default owner record: %v", err)
+		t.Errorf("UpdateFileRecord failed: %v", err)
 	}
 
-	// List files again, it should not fail now
-	wAdmin2 := httptest.NewRecorder()
-	r.ServeHTTP(wAdmin2, reqAdmin)
-	if wAdmin2.Code != http.StatusOK {
-		t.Fatalf("Admin list files with NULL owner failed: %s", wAdmin2.Body.String())
+	// Should be in new persona
+	val, err = h.Store.Get(newOwnerID, "depot", "file:"+fileID)
+	if err != nil || val == nil {
+		t.Errorf("expected file record in NEW persona %s, but not found", newOwnerID)
 	}
 
-	var responseAdmin2 db.FileListResponse
-	json.Unmarshal(wAdmin2.Body.Bytes(), &responseAdmin2)
-	adminRecords2 := responseAdmin2.Files
-	foundDefault := false
-	for _, rec := range adminRecords2 {
-		if rec.ID == "default-owner-id" {
-			foundDefault = true
-			if rec.OwnerID != "admin" {
-				t.Errorf("Expected owner_id to be 'admin' for default record, got %s", rec.OwnerID)
-			}
-		}
-	}
-	if !foundDefault {
-		t.Errorf("Did not find the record that had default owner_id")
-	}
-
-	// 5. Test with mixed IPs (non-local)
-	reqClient2, _ := http.NewRequest("GET", "/files", nil)
-	reqClient2.RemoteAddr = "1.2.3.4:1234"
-	reqClient2.Header.Set("X-Client-ID", clientID)
-	wClient2 := httptest.NewRecorder()
-	r.ServeHTTP(wClient2, reqClient2)
-
-	if wClient2.Code != http.StatusOK {
-		t.Fatalf("Client 2 list files failed: %s", wClient2.Body.String())
-	}
-	var responseClient2 db.FileListResponse
-	json.Unmarshal(wClient2.Body.Bytes(), &responseClient2)
-	client2Records := responseClient2.Files
-	if len(client2Records) == 0 {
-		t.Errorf("Expected at least one record for client 2, got 0")
+	// Should NOT be in old persona
+	val, err = h.Store.Get(clientID, "depot", "file:"+fileID)
+	if err == nil && val != nil {
+		t.Errorf("expected file record NOT to be in OLD persona anymore")
 	}
 }

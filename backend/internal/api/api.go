@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -15,8 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
+type CelerixStore = db.CelerixStore
+
 type Handler struct {
-	DB               *sql.DB
+	Store            CelerixStore
 	StorageDir       string
 	AdminSecret      string
 	VersionConfig    []byte
@@ -32,7 +33,7 @@ func (h *Handler) isAdmin(c *gin.Context) bool {
 	if ownerID == "" {
 		return false
 	}
-	client, err := db.GetClient(h.DB, ownerID)
+	client, err := db.GetClient(h.Store, ownerID)
 	if err != nil {
 		return false
 	}
@@ -46,13 +47,13 @@ func (h *Handler) GetPersona(c *gin.Context) {
 	recoveryCode := ""
 	isAdmin := false
 	if ownerID != "" {
-		client, err := db.GetClient(h.DB, ownerID)
+		client, err := db.GetClient(h.Store, ownerID)
 		if err == nil {
 			name = client.Name
 			recoveryCode = client.RecoveryCode
 			isAdmin = client.IsAdmin
 			// Update last active time
-			_ = db.UpdateClientLastActive(h.DB, ownerID, time.Now().Unix())
+			_ = db.UpdateClientLastActive(h.Store, ownerID, time.Now().Unix())
 		}
 	}
 
@@ -99,7 +100,7 @@ func (h *Handler) ActivateAdmin(c *gin.Context) {
 	}
 
 	// Flag the current client as admin in DB
-	err := db.UpdateClientAdminStatus(h.DB, ownerID, true)
+	err := db.UpdateClientAdminStatus(h.Store, ownerID, true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to activate admin status"})
 		return
@@ -118,7 +119,7 @@ func (h *Handler) RecoverPersona(c *gin.Context) {
 	}
 
 	// Otherwise, check client recovery codes
-	client, err := db.GetClientByRecoveryCode(h.DB, input.Code)
+	client, err := db.GetClientByRecoveryCode(h.Store, input.Code)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Invalid recovery code"})
 		return
@@ -155,7 +156,7 @@ func (h *Handler) UpdateClientName(c *gin.Context) {
 	}
 
 	// Generate a recovery code if it's a new client or they don't have one
-	client, err := db.GetClient(h.DB, ownerID)
+	client, err := db.GetClient(h.Store, ownerID)
 	recoveryCode := ""
 	if err == nil && client.RecoveryCode != "" {
 		recoveryCode = client.RecoveryCode
@@ -167,7 +168,7 @@ func (h *Handler) UpdateClientName(c *gin.Context) {
 	// NEW: Derived Client ID based on recovery code and Celerix namespace
 	deterministicID := uuid.NewSHA1(h.CelerixNamespace, []byte(recoveryCode)).String()
 
-	err = db.UpsertClient(h.DB, deterministicID, input.Name, recoveryCode, time.Now().Unix())
+	err = db.UpsertClient(h.Store, deterministicID, input.Name, recoveryCode, time.Now().Unix())
 	if err != nil {
 		log.Printf("[ERROR] Failed to upsert client: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client name"})
@@ -218,7 +219,7 @@ func (h *Handler) UploadFile(c *gin.Context) {
 	}
 
 	log.Printf("[DEBUG] Saving record: ID=%s, Name=%s, OwnerID=%s", record.ID, record.OriginalName, record.OwnerID)
-	err = db.SaveFileRecord(h.DB, record)
+	err = db.SaveFileRecord(h.Store, record)
 	if err != nil {
 		log.Printf("[DEBUG] Failed to save record: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save record: " + err.Error()})
@@ -261,7 +262,7 @@ func (h *Handler) ListFiles(c *gin.Context) {
 
 	log.Printf("[DEBUG] ListFiles request: isAdmin=%v, X-Client-ID=%s, Search=%s, Page=%d, Limit=%d", isAdmin, ownerID, search, page, limit)
 
-	response, err := db.ListFiles(h.DB, opts)
+	response, err := db.ListFiles(h.Store, opts)
 	if err != nil {
 		log.Printf("[DEBUG] Failed to list files: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list files"})
@@ -275,14 +276,21 @@ func (h *Handler) ListFiles(c *gin.Context) {
 func (h *Handler) DownloadFile(c *gin.Context) {
 	idOrLink := c.Param("id")
 	// Try finding by ID first
-	record, err := db.GetFileRecord(h.DB, idOrLink)
+	record, err := db.GetFileRecord(h.Store, idOrLink)
 	if err != nil {
 		// Try finding by download_link
-		query := `SELECT f.id, f.original_name, f.stored_path, f.size, f.upload_time, COALESCE(f.owner_id, 'admin'), COALESCE(c.name, 'Unknown'), COALESCE(f.download_link, '') 
-		          FROM files f LEFT JOIN clients c ON f.owner_id = c.id WHERE f.download_link = ?`
-		row := h.DB.QueryRow(query, idOrLink)
-		record = &db.FileRecord{}
-		err = row.Scan(&record.ID, &record.OriginalName, &record.StoredPath, &record.Size, &record.UploadTime, &record.OwnerID, &record.OwnerName, &record.DownloadLink)
+		// In Celerix Store, we'll list all and filter for now
+		allFiles, errList := db.GetAllFileRecords(h.Store)
+		if errList == nil {
+			for _, r := range allFiles {
+				if r.DownloadLink == idOrLink {
+					record = &r
+					err = nil
+					break
+				}
+			}
+		}
+
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 			return
@@ -294,7 +302,7 @@ func (h *Handler) DownloadFile(c *gin.Context) {
 
 func (h *Handler) GetFileMetadata(c *gin.Context) {
 	id := c.Param("id")
-	record, err := db.GetFileRecord(h.DB, id)
+	record, err := db.GetFileRecord(h.Store, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 		return
@@ -320,7 +328,7 @@ func (h *Handler) UpdateFile(c *gin.Context) {
 		return
 	}
 
-	err := db.UpdateFileRecord(h.DB, id, input.OriginalName, input.OwnerID)
+	err := db.UpdateFileRecord(h.Store, id, input.OriginalName, input.OwnerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update file"})
 		return
@@ -331,7 +339,7 @@ func (h *Handler) UpdateFile(c *gin.Context) {
 
 func (h *Handler) DeleteFile(c *gin.Context) {
 	id := c.Param("id")
-	record, err := db.GetFileRecord(h.DB, id)
+	record, err := db.GetFileRecord(h.Store, id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 		return
@@ -352,7 +360,7 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	}
 
 	// Delete from DB
-	err = db.DeleteFileRecord(h.DB, id)
+	err = db.DeleteFileRecord(h.Store, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete file record"})
 		return
@@ -367,7 +375,7 @@ func (h *Handler) ListClients(c *gin.Context) {
 		return
 	}
 
-	clients, err := db.ListClients(h.DB)
+	clients, err := db.ListClients(h.Store)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list clients"})
 		return
@@ -401,7 +409,7 @@ func (h *Handler) UpdateClient(c *gin.Context) {
 		return
 	}
 
-	err := db.UpdateClientFull(h.DB, id, input.Name, input.RecoveryCode, input.IsAdmin)
+	err := db.UpdateClientFull(h.Store, id, input.Name, input.RecoveryCode, input.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update client"})
 		return
@@ -417,12 +425,15 @@ func (h *Handler) DeleteClient(c *gin.Context) {
 	}
 
 	id := c.Param("id")
-	if id == "admin" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete admin persona"})
+
+	// Protection: Admin cannot delete themselves
+	currentAdminID := c.GetHeader("X-Client-ID")
+	if id == currentAdminID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete yourself"})
 		return
 	}
 
-	err := db.DeleteClient(h.DB, id)
+	err := db.DeleteClient(h.Store, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete client"})
 		return

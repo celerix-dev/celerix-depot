@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/celerix-dev/celerix-store/pkg/sdk"
 	"github.com/celerix/depot/internal/api"
-	"github.com/celerix/depot/internal/db"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -22,19 +22,19 @@ var frontendDist embed.FS
 var versionFile []byte
 
 func main() {
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "./data/depot.db"
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "./data"
 	}
 
 	storageDir := os.Getenv("STORAGE_DIR")
 	if storageDir == "" {
-		storageDir = "./data/uploads"
+		storageDir = filepath.Join(dataDir, "uploads")
 	}
 
 	// Ensure directories exist
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		log.Fatalf("Failed to create database directory: %v", err)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
 	}
 	if err := os.MkdirAll(storageDir, 0755); err != nil {
 		log.Fatalf("Failed to create storage directory: %v", err)
@@ -49,14 +49,13 @@ func main() {
 		log.Fatalf("Failed to parse CELERIX_NAMESPACE as UUID: %v", err)
 	}
 
-	database, err := db.InitDB(dbPath)
+	store, err := sdk.New(dataDir)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Fatalf("Failed to initialize Celerix Store: %v", err)
 	}
-	defer database.Close()
 
 	h := &api.Handler{
-		DB:               database,
+		Store:            store,
 		StorageDir:       storageDir,
 		AdminSecret:      os.Getenv("ADMIN_SECRET"),
 		VersionConfig:    versionFile,

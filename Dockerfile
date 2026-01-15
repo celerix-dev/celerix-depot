@@ -8,7 +8,6 @@ RUN npm run build
 
 # Stage 2: Build the backend
 FROM golang:1.25.1-alpine AS backend-builder
-RUN apk add --no-cache gcc musl-dev
 WORKDIR /app
 COPY version.json ./
 COPY backend/go.mod backend/go.sum ./
@@ -18,16 +17,16 @@ COPY backend/ ./
 COPY --from=frontend-builder /app/frontend/dist ./cmd/depot/dist
 # Copy version.json to the directory where it's embedded
 COPY version.json ./cmd/depot/version.json
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o depot ./cmd/depot/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o depot ./cmd/depot/main.go
 
 # Stage 3: Final image
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates sqlite
+RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=backend-builder /app/depot .
 RUN mkdir -p data/uploads
 EXPOSE 8080
 ENV PORT=8080
-ENV DB_PATH=/app/data/depot.db
+ENV DATA_DIR=/app/data
 ENV STORAGE_DIR=/app/data/uploads
 CMD ["./depot"]
