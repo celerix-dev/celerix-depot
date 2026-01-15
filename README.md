@@ -35,6 +35,7 @@ services:
       - ./data:/app/data
       - ./data/uploads:/app/data/uploads
     environment:
+      - CELERIX_NAMESPACE={a-random-uuid}
       - DB_PATH=/app/data/depot.db
       - STORAGE_DIR=/app/data/uploads
       - ADMIN_SECRET=your-secret-key-here
@@ -50,13 +51,15 @@ docker-compose up -d
 
 ## ⚙️ Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | The port the service listens on. | `8080` |
-| `DB_PATH` | Path to the SQLite database. | `/app/data/depot.db` |
-| `STORAGE_DIR`| Directory for file uploads. | `/app/data/uploads` |
-| `ADMIN_SECRET`| Key to activate Admin Persona. | `admin123` |
+| Variable            | Description                       | Default              |
+|---------------------|-----------------------------------|----------------------|
+| `CELERIX_NAMESPACE` | Unique namespace for the service. | a random uuid        |
+| `PORT`              | The port the service listens on.  | `8080`               |
+| `DB_PATH`           | Path to the SQLite database.      | `/app/data/depot.db` |
+| `STORAGE_DIR`       | Directory for file uploads.       | `/app/data/uploads`  |
+| `ADMIN_SECRET`      | Key to activate Admin Persona.    | `admin123`           |
 
+*Note: **CELERIX_NAMESPACE** must be a valid UUID and needs to be the same across all services within the docker-compose cluster.*
 ## 🛠️ Build & Development
 
 If you want to modify the code or build locally:
