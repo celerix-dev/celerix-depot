@@ -1,99 +1,84 @@
 # Celerix Depot
 
+![Build Status](https://github.com/celerix-dev/celerix-depot/actions/workflows/docker-publish.yml/badge.svg)
+![Latest Version](https://img.shields.io/github/v/tag/celerix-dev/celerix-depot?label=version&color=blue)
+![Platform Support](https://img.shields.io/badge/platform-linux/amd64%20|%20linux/arm64-lightgrey)
+
 Celerix Depot is a lightweight, self-hosted file sharing service designed for "homelab" use. It allows users to easily upload, store, and share files through a clean, persona-based web interface.
 
 ## 🚀 Features
 
+- **Multi-Arch Support**: Native images for `amd64` (PC/Server) and `arm64` (Apple Silicon/Raspberry Pi).
 - **Drag-and-Drop Uploads**: Simple and intuitive interface for uploading files.
-- **Persona System**: 
+- **Persona System**:
   - **Admin Persona**: Full visibility and management of all uploaded files and user personas.
   - **Client Persona**: Users see and manage only their own uploads.
-- **Privacy & Public Sharing**: Files are private to the owner by default, but each upload generates a unique, non-guessable public download link for easy sharing.
-- **Persona Recovery**: Clients can restore their identity across devices using a short, 8-character recovery code.
-- **Admin Management**: Dedicated interface for administrators to edit file metadata and manage client personas (names and recovery codes).
-- **Filtering & Pagination**: Efficiently browse large file collections with real-time search and 8-item-per-page pagination.
-- **Docker Ready**: Fully containerized for easy deployment on NAS or home servers.
-- **Modern UI**: Built with Vue 3, featuring a responsive design with dark mode support.
+- **Privacy & Public Sharing**: Files are private by default, with unique public download links available.
+- **Persona Recovery**: Clients can restore their identity across devices using an 8-character recovery code.
 
-## 🛠 Tech Stack
-
-### Backend
-- **Language**: Go
-- **Framework**: Gin Gonic (Web)
-- **Database**: SQLite (Metadata indexing)
-- **Storage**: Local Disk (Streamed uploads)
-
-### Frontend
-- **Framework**: Vue 3 (Composition API)
-- **Build Tool**: Vite
-- **Styling**: Bootstrap / Halfmoon / Tabler Icons
+---
 
 ## 📦 Deployment (Docker Compose)
 
-The easiest way to run Celerix Depot is using Docker Compose.
+The easiest way to run Celerix Depot is using the pre-built image from the GitHub Container Registry.
 
-1. Create a `docker-compose.yml` file:
+1. **Create a `docker-compose.yml` file:**
 
 ```yaml
 services:
   depot:
-    build: .
+    image: ghcr.io/celerix-dev/celerix-depot:latest
     container_name: celerix-depot
     ports:
       - "8080:8080"
     volumes:
       - ./data:/app/data
+      - ./data/uploads:/app/data/uploads
     environment:
+      - DB_PATH=/app/data/depot.db
+      - STORAGE_DIR=/app/data/uploads
       - ADMIN_SECRET=your-secret-key-here
     restart: unless-stopped
 ```
 
-2. Run the service:
+2. **Start the service:**
 ```bash
 docker-compose up -d
 ```
 
-Your Depot is now reachable at `http://your-server-ip:8080`.
+---
 
 ## ⚙️ Configuration
 
-Celerix Depot can be configured using the following environment variables:
-
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | The port the service listens on inside the container. | `8080` |
-| `DB_PATH` | Path to the SQLite database file. | `/app/data/depot.db` |
-| `STORAGE_DIR`| Directory where uploaded files are stored. | `/app/data/uploads` |
-| `ADMIN_SECRET`| The secret key used to activate the Admin Persona. | `admin123` |
+| `PORT` | The port the service listens on. | `8080` |
+| `DB_PATH` | Path to the SQLite database. | `/app/data/depot.db` |
+| `STORAGE_DIR`| Directory for file uploads. | `/app/data/uploads` |
+| `ADMIN_SECRET`| Key to activate Admin Persona. | `admin123` |
 
-## 🔑 Personas & Recovery
+## 🛠️ Build & Development
 
-- **Becoming Admin**: Click the settings (gear) icon in the header and enter the `ADMIN_SECRET`.
-- **Client Identification**: Every browser is assigned a unique `X-Client-ID` stored in `localStorage`.
-- **Identity Recovery**: 
-  - When setting a name, clients are given a **Recovery Code**. 
-  - If `localStorage` is cleared, users can click the "Recover Persona" (refresh) icon and enter their code to regain access to their files.
-  - Admins can view and regenerate recovery codes via the Admin Management panel.
+If you want to modify the code or build locally:
 
-## 👨‍💻 Development
+```bash
+# Build and run with a single command
+docker-compose up --build
+```
 
-### Backend
+### Manual Development
+**Backend (Go)**
 ```bash
 cd backend
 go mod download
 go run cmd/depot/main.go
 ```
 
-### Frontend
+**Frontend (Vue 3)**
 ```bash
 cd frontend
 npm install
 npm run dev
-```
-
-### Build from Source
-```bash
-docker build -t celerix-depot .
 ```
 
 ## 📄 License
