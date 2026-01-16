@@ -11,6 +11,7 @@ interface FileRecord {
   owner_id: string;
   owner_name: string;
   download_link: string;
+  is_public: boolean;
 }
 
 interface ClientRecord {
@@ -30,7 +31,8 @@ const files = ref<FileRecord[]>([]);
 const editingFileId = ref<string | null>(null);
 const fileEditForm = ref({
   original_name: '',
-  owner_id: ''
+  owner_id: '',
+  is_public: false
 });
 
 const fetchAllFiles = async () => {
@@ -54,7 +56,8 @@ const startEditFile = (file: FileRecord) => {
   editingFileId.value = file.id;
   fileEditForm.value = {
     original_name: file.original_name,
-    owner_id: file.owner_id
+    owner_id: file.owner_id,
+    is_public: file.is_public
   };
 };
 
@@ -264,6 +267,7 @@ onMounted(async () => {
                 <th>Owner ID</th>
                 <th>Owner Name</th>
                 <th>Size</th>
+                <th>Public</th>
                 <th>Upload Time</th>
                 <th>Actions</th>
               </tr>
@@ -289,6 +293,16 @@ onMounted(async () => {
                 </td>
                 <td>{{ file.owner_name }}</td>
                 <td>{{ formatSize(file.size) }}</td>
+                <td>
+                  <template v-if="editingFileId === file.id">
+                    <input v-model="fileEditForm.is_public" type="checkbox" class="form-check-input" />
+                  </template>
+                  <template v-else>
+                    <span :class="['badge', file.is_public ? 'bg-info' : 'bg-secondary']">
+                      {{ file.is_public ? 'YES' : 'NO' }}
+                    </span>
+                  </template>
+                </td>
                 <td>{{ formatDate(file.upload_time) }}</td>
                 <td>
                   <div v-if="editingFileId === file.id" class="btn-group btn-group-sm">

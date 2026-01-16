@@ -12,8 +12,10 @@ interface FileRecord {
   original_name: string;
   size: number;
   upload_time: number;
+  owner_id: string;
   owner_name: string;
   download_link: string;
+  is_public: boolean;
 }
 
 const files = ref<FileRecord[]>([]);
@@ -21,6 +23,7 @@ const total = ref(0);
 const search = ref('');
 const currentPage = ref(1);
 const limit = 8;
+const currentClientID = getClientID();
 
 const fetchFiles = async () => {
   console.log('Fetching files for client:', getClientID());
@@ -114,6 +117,34 @@ const deleteFile = async (file: FileRecord) => {
   }
 };
 
+const togglePublic = async (file: FileRecord) => {
+  try {
+    const response = await fetch(`/api/files/${file.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Client-ID': getClientID(),
+        'X-Admin-Secret': getAdminSecret(),
+      },
+      body: JSON.stringify({
+        original_name: file.original_name,
+        owner_id: file.owner_id,
+        is_public: !file.is_public
+      }),
+    });
+
+    if (response.ok) {
+      await fetchFiles();
+    } else {
+      const data = await response.json().catch(() => ({}));
+      alert(`Failed to update file visibility: ${data.error || response.statusText}`);
+    }
+  } catch (error) {
+    console.error('Error updating file visibility:', error);
+    alert('Error updating file visibility.');
+  }
+};
+
 onMounted(fetchFiles);
 
 defineExpose({ fetchFiles });
@@ -148,6 +179,7 @@ defineExpose({ fetchFiles });
               <tr>
                 <th>Name</th>
                 <th v-if="persona === 'admin'">Owner</th>
+                <th v-else>Owner</th>
                 <th>Size</th>
                 <th>Uploaded At</th>
                 <th class="text-end">Action</th>
@@ -158,10 +190,26 @@ defineExpose({ fetchFiles });
                 <td>
                   <i class="ti ti-file me-2"></i>
                   {{ file.original_name }}
+                  <div class="d-inline-block ms-2">
+                    <span v-if="file.is_public" class="badge bg-info-subtle text-info border">
+                      Public
+                    </span>
+                    <button v-if="file.owner_id === currentClientID || persona === 'admin'" 
+                            class="btn btn-xs ms-1 p-0 border-0" 
+                            @click="togglePublic(file)"
+                            :title="file.is_public ? 'Make Private' : 'Make Public'">
+                      <i :class="['ti', file.is_public ? 'ti-lock-open text-info' : 'ti-lock text-muted']"></i>
+                    </button>
+                  </div>
                 </td>
                 <td v-if="persona === 'admin'">
                   <span class="badge bg-secondary-subtle text-secondary border">
                     {{ file.owner_name }}
+                  </span>
+                </td>
+                <td v-else>
+                  <span class="badge bg-primary-subtle text-primary border">
+                    {{ file.owner_id === currentClientID ? 'You' : (file.owner_name || 'Unknown') }}
                   </span>
                 </td>
                 <td>{{ formatSize(file.size) }}</td>

@@ -236,6 +236,7 @@ func TestFileUploadAndList(t *testing.T) {
 	router := gin.Default()
 	router.POST("/upload", h.UploadFile)
 	router.GET("/files", h.ListFiles)
+	router.PUT("/files/:id", h.UpdateFile)
 
 	clientID := "test-client-id"
 
@@ -282,8 +283,62 @@ func TestFileUploadAndList(t *testing.T) {
 		t.Errorf("expected file ID %s, got %v", fileID, firstFile["id"])
 	}
 
-	// 3. Verify file is in the persona's store
-	val, err := h.Store.Get(clientID, "depot", "file:"+fileID)
+	// 3. Test Public Visibility Toggle (New flow)
+	// Initially private
+	body = &bytes.Buffer{}
+	writer = multipart.NewWriter(body)
+	part, _ = writer.CreateFormFile("file", "toggle.txt")
+	part.Write([]byte("i will be public soon"))
+	writer.Close()
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("POST", "/upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Client-ID", clientID)
+	router.ServeHTTP(w, req)
+
+	var toggleUploadResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &toggleUploadResp)
+	toggleFileID := toggleUploadResp["id"].(string)
+
+	// Toggle to public using PUT /api/files/:id
+	updateBody := bytes.NewBufferString(`{"original_name": "toggle.txt", "owner_id": "test-client-id", "is_public": true}`)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("PUT", "/files/"+toggleFileID, updateBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-ID", clientID) // Owner can update
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Toggle visibility failed: %v", w.Body.String())
+	}
+
+	// List files as a DIFFERENT client
+	otherClientID := "other-client-id"
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/files", nil)
+	req.Header.Set("X-Client-ID", otherClientID)
+	router.ServeHTTP(w, req)
+
+	var otherListResp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &otherListResp)
+	otherFiles := otherListResp["files"].([]interface{})
+
+	// Should see the public file
+	found := false
+	for _, f := range otherFiles {
+		fileMap := f.(map[string]interface{})
+		if fileMap["id"] == toggleFileID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected toggleFileID %s to be visible to other client after toggle", toggleFileID)
+	}
+
+	// 4. Verify file is in the persona's store
+	val, err := h.Store.Get(clientID, "depot", "file:"+toggleFileID)
 	if err != nil || val == nil {
 		t.Errorf("expected file record in persona %s, but not found", clientID)
 	}
@@ -297,7 +352,7 @@ func TestFileUploadAndList(t *testing.T) {
 	// 5. Verify UpdateFileRecord moves record if owner changes
 	// We need an admin request context or just call DB directly
 	newOwnerID := "new-owner-id"
-	err = db.UpdateFileRecord(h.Store, fileID, "updated.txt", newOwnerID)
+	err = db.UpdateFileRecord(h.Store, fileID, "updated.txt", newOwnerID, false)
 	if err != nil {
 		t.Errorf("UpdateFileRecord failed: %v", err)
 	}

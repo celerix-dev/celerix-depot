@@ -209,6 +209,11 @@ func (h *Handler) UploadFile(c *gin.Context) {
 	// Generate public download link
 	downloadLink := uuid.New().String()
 
+	isPublic := false
+	if c.PostForm("is_public") == "true" {
+		isPublic = true
+	}
+
 	record := db.FileRecord{
 		ID:           id,
 		OriginalName: header.Filename,
@@ -217,6 +222,7 @@ func (h *Handler) UploadFile(c *gin.Context) {
 		UploadTime:   time.Now().Unix(),
 		OwnerID:      ownerID,
 		DownloadLink: downloadLink,
+		IsPublic:     isPublic,
 	}
 
 	log.Printf("[DEBUG] Saving record: ID=%s, Name=%s, OwnerID=%s", record.ID, record.OriginalName, record.OwnerID)
@@ -313,15 +319,25 @@ func (h *Handler) GetFileMetadata(c *gin.Context) {
 }
 
 func (h *Handler) UpdateFile(c *gin.Context) {
-	if !h.isAdmin(c) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+	id := c.Param("id")
+	record, err := db.GetFileRecord(h.Store, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
 		return
 	}
 
-	id := c.Param("id")
+	// Permission check: admin or owner
+	ownerID := c.GetHeader("X-Client-ID")
+	isAdmin := h.isAdmin(c)
+	if !isAdmin && record.OwnerID != ownerID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You don't have permission to update this file"})
+		return
+	}
+
 	var input struct {
 		OriginalName string `json:"original_name" binding:"required"`
 		OwnerID      string `json:"owner_id" binding:"required"`
+		IsPublic     bool   `json:"is_public"`
 	}
 
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -329,7 +345,13 @@ func (h *Handler) UpdateFile(c *gin.Context) {
 		return
 	}
 
-	err := db.UpdateFileRecord(h.Store, id, input.OriginalName, input.OwnerID)
+	// Only admin can change owner
+	finalOwnerID := input.OwnerID
+	if !isAdmin {
+		finalOwnerID = record.OwnerID
+	}
+
+	err = db.UpdateFileRecord(h.Store, id, input.OriginalName, finalOwnerID, input.IsPublic)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update file"})
 		return

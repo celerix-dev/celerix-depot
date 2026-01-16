@@ -19,6 +19,7 @@ type FileRecord struct {
 	OwnerID      string `json:"owner_id"`
 	OwnerName    string `json:"owner_name"`
 	DownloadLink string `json:"download_link"`
+	IsPublic     bool   `json:"is_public"`
 }
 
 type ListFilesOptions struct {
@@ -56,7 +57,7 @@ func SaveFileRecord(s CelerixStore, record FileRecord) error {
 	return s.Set(persona, AppID, FileKeyPrefix+record.ID, record)
 }
 
-func UpdateFileRecord(s CelerixStore, id string, name string, ownerID string) error {
+func UpdateFileRecord(s CelerixStore, id string, name string, ownerID string, isPublic bool) error {
 	record, err := GetFileRecord(s, id)
 	if err != nil {
 		return err
@@ -68,6 +69,7 @@ func UpdateFileRecord(s CelerixStore, id string, name string, ownerID string) er
 
 	record.OriginalName = name
 	record.OwnerID = ownerID
+	record.IsPublic = isPublic
 
 	newPersona := ownerID
 	if newPersona == "" {
@@ -125,32 +127,24 @@ func GetFileRecord(s CelerixStore, id string) (*FileRecord, error) {
 func ListFiles(s CelerixStore, opts ListFilesOptions) (*FileListResponse, error) {
 	var allRecords []FileRecord
 
-	if opts.OwnerID != "" {
-		// Optimization: if we have OwnerID, only look in that persona
-		appStore, err := s.GetAppStore(opts.OwnerID, AppID)
-		if err == nil {
-			for k := range appStore {
-				if strings.HasPrefix(k, FileKeyPrefix) {
-					// Using sdk.Get for individual item to ensure type safety if needed
-					r, err := sdk.Get[FileRecord](s, opts.OwnerID, AppID, k)
-					if err == nil {
-						allRecords = append(allRecords, r)
-					}
-				}
-			}
-		}
-	} else {
-		// Admin view or no owner specified: use DumpApp for efficiency
-		allData, err := s.DumpApp(AppID)
-		if err != nil {
-			return nil, err
-		}
+	// We always need to check for public files across all personas if it's NOT an admin view
+	// or if it IS a client view.
 
-		for personaID, appStore := range allData {
-			for k := range appStore {
-				if strings.HasPrefix(k, FileKeyPrefix) {
-					r, err := sdk.Get[FileRecord](s, personaID, AppID, k)
-					if err == nil {
+	// Admin view or no owner specified: use DumpApp for efficiency
+	allData, err := s.DumpApp(AppID)
+	if err != nil {
+		return nil, err
+	}
+
+	for personaID, appStore := range allData {
+		for k := range appStore {
+			if strings.HasPrefix(k, FileKeyPrefix) {
+				r, err := sdk.Get[FileRecord](s, personaID, AppID, k)
+				if err == nil {
+					// Logic for inclusion:
+					// 1. If it's admin (opts.OwnerID == ""), include everything.
+					// 2. If it's a specific owner, include if r.OwnerID == opts.OwnerID OR r.IsPublic is true.
+					if opts.OwnerID == "" || r.OwnerID == opts.OwnerID || r.IsPublic {
 						allRecords = append(allRecords, r)
 					}
 				}
