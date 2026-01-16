@@ -1,42 +1,14 @@
 package db
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/celerix-dev/celerix-store/pkg/sdk"
 )
 
-type CelerixStore interface {
-	Get(personaID, appID, key string) (any, error)
-	Set(personaID, appID, key string, val any) error
-	Delete(personaID, appID, key string) error
-	GetApps(personaID string) ([]string, error)
-	GetPersonas() ([]string, error)
-	GetAppStore(personaID, appID string) (map[string]any, error)
-	DumpApp(appID string) (map[string]map[string]any, error)
-	GetGlobal(appID, key string) (any, string, error)
-	Move(srcPersona, dstPersona, appID, key string) error
-}
-
-func getRecord[T any](s CelerixStore, personaID, appID, key string) (T, error) {
-	var target T
-	val, err := s.Get(personaID, appID, key)
-	if err != nil {
-		return target, err
-	}
-
-	if v, ok := val.(T); ok {
-		return v, nil
-	}
-
-	bytes, err := json.Marshal(val)
-	if err != nil {
-		return target, err
-	}
-	err = json.Unmarshal(bytes, &target)
-	return target, err
-}
+type CelerixStore = sdk.CelerixStore
 
 type FileRecord struct {
 	ID           string `json:"id"`
@@ -73,7 +45,7 @@ const (
 	AppID           = "depot"
 	FileKeyPrefix   = "file:"
 	ClientKeyPrefix = "client:"
-	SystemPersona   = "_system"
+	SystemPersona   = sdk.SystemPersona
 )
 
 func SaveFileRecord(s CelerixStore, record FileRecord) error {
@@ -130,7 +102,7 @@ func GetFileRecord(s CelerixStore, id string) (*FileRecord, error) {
 		return nil, err
 	}
 
-	record, err := getRecord[FileRecord](s, personaID, AppID, FileKeyPrefix+id)
+	record, err := sdk.Get[FileRecord](s, personaID, AppID, FileKeyPrefix+id)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +132,7 @@ func ListFiles(s CelerixStore, opts ListFilesOptions) (*FileListResponse, error)
 			for k := range appStore {
 				if strings.HasPrefix(k, FileKeyPrefix) {
 					// Using sdk.Get for individual item to ensure type safety if needed
-					r, err := getRecord[FileRecord](s, opts.OwnerID, AppID, k)
+					r, err := sdk.Get[FileRecord](s, opts.OwnerID, AppID, k)
 					if err == nil {
 						allRecords = append(allRecords, r)
 					}
@@ -177,7 +149,7 @@ func ListFiles(s CelerixStore, opts ListFilesOptions) (*FileListResponse, error)
 		for personaID, appStore := range allData {
 			for k := range appStore {
 				if strings.HasPrefix(k, FileKeyPrefix) {
-					r, err := getRecord[FileRecord](s, personaID, AppID, k)
+					r, err := sdk.Get[FileRecord](s, personaID, AppID, k)
 					if err == nil {
 						allRecords = append(allRecords, r)
 					}
@@ -279,7 +251,7 @@ func DeleteClient(s CelerixStore, id string) error {
 }
 
 func GetClient(s CelerixStore, id string) (*ClientRecord, error) {
-	client, err := getRecord[ClientRecord](s, SystemPersona, AppID, ClientKeyPrefix+id)
+	client, err := sdk.Get[ClientRecord](s, SystemPersona, AppID, ClientKeyPrefix+id)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +266,7 @@ func GetClientByRecoveryCode(s CelerixStore, code string) (*ClientRecord, error)
 
 	for k := range appStore {
 		if strings.HasPrefix(k, ClientKeyPrefix) {
-			c, err := getRecord[ClientRecord](s, SystemPersona, AppID, k)
+			c, err := sdk.Get[ClientRecord](s, SystemPersona, AppID, k)
 			if err == nil && c.RecoveryCode == code {
 				return &c, nil
 			}
@@ -312,7 +284,7 @@ func ListClients(s CelerixStore) ([]ClientRecord, error) {
 	var clients []ClientRecord
 	for k := range appStore {
 		if strings.HasPrefix(k, ClientKeyPrefix) {
-			c, err := getRecord[ClientRecord](s, SystemPersona, AppID, k)
+			c, err := sdk.Get[ClientRecord](s, SystemPersona, AppID, k)
 			if err == nil {
 				clients = append(clients, c)
 			}

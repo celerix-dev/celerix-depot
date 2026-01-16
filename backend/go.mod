@@ -3,7 +3,7 @@ module github.com/celerix/depot
 go 1.25.1
 
 require (
-	github.com/celerix-dev/celerix-store v0.2.4
+	github.com/celerix-dev/celerix-store v0.2.5
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
 )
@@ -41,3 +41,5 @@ require (
 	golang.org/x/tools v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 )
+
+replace github.com/celerix-dev/celerix-store => ../../celerix-store

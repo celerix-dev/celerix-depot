@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/celerix-dev/celerix-store/pkg/engine"
 	"github.com/celerix-dev/celerix-store/pkg/sdk"
 	"github.com/celerix/depot/internal/db"
 	"github.com/gin-gonic/gin"

@@ -8,13 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/celerix-dev/celerix-store/pkg/sdk"
 	"github.com/celerix/depot/internal/db"
 	"github.com/celerix/depot/internal/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-type CelerixStore = db.CelerixStore
+type CelerixStore = sdk.CelerixStore
 
 type Handler struct {
 	Store            CelerixStore

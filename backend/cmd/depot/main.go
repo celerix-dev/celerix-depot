@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	_ "github.com/celerix-dev/celerix-store/pkg/engine"
 	"github.com/celerix-dev/celerix-store/pkg/sdk"
 	"github.com/celerix/depot/internal/api"
 	"github.com/gin-gonic/gin"
