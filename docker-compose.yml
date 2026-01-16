@@ -17,11 +17,22 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/app/data
       - ./data/uploads:/app/data/uploads
     environment:
       <<: *common-env
-      DATA_DIR: /app/data
       STORAGE_DIR: /app/data/uploads
       ADMIN_SECRET: admin123
+      CELERIX_STORE_ADDR: celerix-store:7001
     restart: always
+    depends_on:
+      - celerix-store
+  celerix-store:
+    container_name: celerix-store
+    image: ghcr.io/celerix-dev/celerix-store:0.2.11
+    ports:
+      - "7001:7001"
+      - "7002:7002"
+    volumes:
+      - ./data:/app/data
+    environment:
+      <<: *common-env

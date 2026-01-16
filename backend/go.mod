@@ -3,7 +3,7 @@ module github.com/celerix/depot
 go 1.25.1
 
 require (
-	github.com/celerix-dev/celerix-store v0.2.6
+	github.com/celerix-dev/celerix-store v0.2.10
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
 )
