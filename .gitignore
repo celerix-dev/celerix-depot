@@ -10,3 +10,5 @@ frontend/dist
 .idea
 
 backend/vendor
+
+**/.DS_Store
